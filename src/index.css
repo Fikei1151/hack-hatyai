@@ -1,0 +1,335 @@
+@import 'tailwindcss';
+@import '@fontsource/ibm-plex-sans-thai/400.css';
+@import '@fontsource/ibm-plex-sans-thai/500.css';
+@import '@fontsource/ibm-plex-sans-thai/600.css';
+@import '@fontsource/ibm-plex-sans-thai/700.css';
+
+@theme {
+  --font-sans: 'IBM Plex Sans Thai', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --color-ink: #f0efec;
+  --color-ink-2: #c3c2b7;
+  --color-ink-3: #898781;
+  --color-panel: rgb(16 18 23 / 0.84);
+  --color-panel-solid: #111318;
+  --color-line: rgb(255 255 255 / 0.09);
+  --color-grid: #2c2c2a;
+  --color-base: #383835;
+  --color-accent: #3987e5;
+  --color-accent-2: #d95926;
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0b0d11;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.scene-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  outline: none;
+}
+
+.labels-layer {
+  position: absolute !important;
+  inset: 0;
+  z-index: 0; /* own stacking context: CSS2DRenderer z-sorts labels with large z-index values */
+  pointer-events: none;
+}
+
+.glass {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* thin scrollbars inside panels */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+
+/* ── 3D labels ─────────────────────────────────────────── */
+.poi-label {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transform: translateY(-2px);
+}
+.poi-pin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-good);
+  box-shadow:
+    0 0 0 2px #0b0d11,
+    0 0 0 3px rgb(255 255 255 / 0.6);
+  margin-bottom: 2px;
+  flex: none;
+}
+.poi-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: rgb(12 14 18 / 0.82);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 8px;
+  padding: 3px 8px 4px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.poi-name {
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.poi-depth {
+  color: var(--color-ink-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.poi-label[data-level='warning'] .poi-pin {
+  background: var(--color-warning);
+}
+.poi-label[data-level='serious'] .poi-pin {
+  background: var(--color-serious);
+}
+.poi-label[data-level='critical'] .poi-pin {
+  background: var(--color-critical);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.poi-label[data-level='critical'] .poi-depth,
+.poi-label[data-level='serious'] .poi-depth {
+  color: #ffd9cc;
+  font-weight: 600;
+}
+@keyframes pulse {
+  50% {
+    box-shadow:
+      0 0 0 2px #0b0d11,
+      0 0 0 7px rgb(208 59 59 / 0.35);
+  }
+}
+.inflow-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgb(12 14 18 / 0.78);
+  border: 1px solid rgb(57 135 229 / 0.5);
+  border-radius: 8px;
+  padding: 3px 9px;
+  font-size: 11px;
+  color: var(--color-ink-2);
+  white-space: nowrap;
+  line-height: 1.25;
+}
+.inflow-label b {
+  display: block;
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.inflow-label small {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.inflow-arrow {
+  color: #6da7ec;
+  font-size: 14px;
+}
+.place-label {
+  font-size: 12px;
+  color: rgb(255 255 255 / 0.85);
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.9),
+    0 0 6px rgb(0 0 0 / 0.6);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* form controls */
+.field {
+  width: 100%;
+  background: rgb(255 255 255 / 0.05);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  padding: 6px 9px;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.field:focus {
+  border-color: rgb(57 135 229 / 0.7);
+  background: rgb(255 255 255 / 0.07);
+}
+select.field option {
+  background: #111318;
+}
+input[type='range'] {
+  accent-color: var(--color-accent);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 9px;
+  padding: 7px 11px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-line);
+  background: rgb(255 255 255 / 0.06);
+  color: var(--color-ink);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: rgb(255 255 255 / 0.11);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn-primary {
+  background: #2a78d6;
+  border-color: #3987e5;
+}
+.btn-primary:hover {
+  background: #3987e5;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn-ghost:hover {
+  background: rgb(255 255 255 / 0.08);
+}
+:focus-visible {
+  outline: 2px solid #6da7ec;
+  outline-offset: 2px;
+}
+
+/* canal names: blue italic ribbon text so water reads at a glance */
+.canal-label {
+  font-size: 12px;
+  font-weight: 600;
+  font-style: italic;
+  color: #cde2fb;
+  letter-spacing: 0.02em;
+  text-shadow:
+    0 0 3px #0b2a55,
+    0 0 6px #0b2a55,
+    0 1px 2px rgb(0 0 0 / 0.8);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.road-label {
+  font-size: 10.5px;
+  color: #f0efec;
+  background: rgb(20 22 26 / 0.62);
+  border-radius: 4px;
+  padding: 0 5px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.road-major {
+  font-size: 11.5px;
+  font-weight: 600;
+  background: rgb(120 82 10 / 0.72);
+}
+
+/* important places (hospitals, schools, temples, markets …) */
+.kp-label {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 190px;
+  background: rgb(12 14 18 / 0.8);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 999px;
+  padding: 2px 8px 2px 3px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-ink);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+.kp-label:hover {
+  border-color: rgb(255 255 255 / 0.4);
+  z-index: 99999 !important;
+}
+.kp-icon {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  flex: none;
+}
+.kp-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kp-depth {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.kp-depth:empty {
+  display: none;
+}
+.kp-health .kp-icon { background: #d03b3b; }
+.kp-emergency .kp-icon { background: #eb6834; }
+.kp-shelter .kp-icon { background: #0ca30c; }
+.kp-education .kp-icon { background: #2a78d6; }
+.kp-religion .kp-icon { background: #c98500; }
+.kp-market .kp-icon { background: #d55181; }
+.kp-government .kp-icon { background: #6250d6; }
+.kp-transport .kp-icon { background: #199e70; }
+.kp-landmark .kp-icon { background: #6b7280; }
+.kp-lodging .kp-icon { background: #8b6f47; }
+.kp-label[data-importance='4'],
+.kp-label[data-importance='3'] {
+  font-size: 10.5px;
+  opacity: 0.92;
+}
+.kp-label[data-level='warning'] { border-color: var(--color-warning); }
+.kp-label[data-level='warning'] .kp-depth { color: var(--color-warning); }
+.kp-label[data-level='serious'] { border-color: var(--color-serious); background: rgb(60 24 12 / 0.88); }
+.kp-label[data-level='serious'] .kp-depth { color: #ffc4a8; }
+.kp-label[data-level='critical'] { border-color: var(--color-critical); background: rgb(70 14 14 / 0.9); }
+.kp-label[data-level='critical'] .kp-depth { color: #ffd0d0; }

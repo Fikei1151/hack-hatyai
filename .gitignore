@@ -1,0 +1,11 @@
+node_modules
+dist
+.cache
+.env.local
+.env.*.local
+*.log
+.DS_Store
+supabase/.temp
+supabase/.branches
+*.tsbuildinfo
+.claude/worktrees/

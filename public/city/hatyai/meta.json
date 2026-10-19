@@ -1,0 +1,304 @@
+{
+ "id": "hatyai",
+ "name": "Hat Yai",
+ "nameTh": "หาดใหญ่",
+ "generatedAt": "2026-10-19T09:17:25.136Z",
+ "origin": {
+  "lat": 7.01,
+  "lon": 100.47
+ },
+ "projection": {
+  "mPerDegLat": 110590.81172498286,
+  "mPerDegLon": 110492.83851370223
+ },
+ "cell": 20,
+ "nx": 720,
+ "ny": 720,
+ "width": 14400,
+ "height": 14400,
+ "bounds": {
+  "south": 6.944895133802753,
+  "west": 100.40483740578257,
+  "north": 7.075104866197247,
+  "east": 100.53516259421743
+ },
+ "elevation": {
+  "min": -2.8283143043518066,
+  "max": 383.2252502441406,
+  "p05": 2.7549681663513184,
+  "p50": 12.98934268951416,
+  "p95": 145.67831420898438
+ },
+ "files": {
+  "terrain": "terrain.f32",
+  "landcover": "landcover.rgba",
+  "buildings": "buildings.bin",
+  "waterways": "waterways.json",
+  "roads": "roads.bin",
+  "roadLabels": "road_labels.json",
+  "places": "places.json",
+  "imageryBase": "imagery_base.jpg",
+  "imageryDetail": "imagery_detail.jpg"
+ },
+ "imagery": {
+  "base": {
+   "file": "imagery_base.jpg",
+   "zoom": 15,
+   "x0": -7199.999999999993,
+   "y0": -7199.9999999999545,
+   "x1": 7199.999999999993,
+   "y1": 7199.9999999999545,
+   "size": 3072
+  },
+  "detail": {
+   "file": "imagery_detail.jpg",
+   "zoom": 17,
+   "x0": -2123.76790371547,
+   "y0": -2787.0678410374394,
+   "x1": 2676.2320962834783,
+   "y1": 2012.9321589625956,
+   "size": 4096
+  }
+ },
+ "buildings": {
+  "count": 91273
+ },
+ "inflows": [
+  {
+   "id": "utaphao",
+   "name": "คลองอู่ตะเภา",
+   "share": 0.82,
+   "x": -2600.65889081275,
+   "y": -7023.987402332292
+  },
+  {
+   "id": "wa",
+   "name": "คลองหวะ",
+   "share": 0.15,
+   "x": 7148.0137584125,
+   "y": -5191.8957789716
+  },
+  {
+   "id": "wat",
+   "name": "คลองวาด",
+   "share": 0.03,
+   "x": -6782.448202189605,
+   "y": -1530.2892981632656
+  }
+ ],
+ "gauges": [
+  {
+   "id": "x44",
+   "code": "X.44",
+   "name": "บ้านหาดใหญ่ใน (คลองอู่ตะเภา)",
+   "stationId": 2591,
+   "lat": 7.00218,
+   "lon": 100.456062,
+   "watch": 6,
+   "critical": 7.4,
+   "bank": 8.3,
+   "x": -1540.0491832035407,
+   "y": -864.8201476893346
+  },
+  {
+   "id": "x174",
+   "code": "X.174",
+   "name": "บ้านคลองหวะ (คลองหวะ)",
+   "stationId": 2590,
+   "lat": 6.98637,
+   "lon": 100.481857,
+   "watch": 7.4,
+   "critical": 8.88,
+   "bank": 8.88,
+   "x": 1310.113586257655,
+   "y": -2613.260881061325
+  }
+ ],
+ "pois": [
+  {
+   "id": "station",
+   "name": "สถานีรถไฟชุมทางหาดใหญ่",
+   "en": "Hat Yai Junction Station",
+   "osmName": "ชุมทางหาดใหญ่",
+   "lat": 7.0038736,
+   "lon": 100.4673248,
+   "x": -295.59044159172004,
+   "y": -677.523548951871
+  },
+  {
+   "id": "kimyong",
+   "name": "ตลาดกิมหยง",
+   "en": "Kim Yong Market",
+   "osmName": "Kim Yong Market",
+   "lat": 7.0076508,
+   "lon": 100.4696991,
+   "x": -33.247295108680206,
+   "y": -259.79993490426176
+  },
+  {
+   "id": "central",
+   "name": "เซ็นทรัลเฟสติวัล หาดใหญ่",
+   "en": "Central Festival Hat Yai",
+   "osmName": "Central Hatyai",
+   "lat": 6.9919232,
+   "lon": 100.4829499,
+   "x": 1430.8712094680727,
+   "y": -1999.1279853901951
+  },
+  {
+   "id": "leegardens",
+   "name": "ลีการ์เด้นส์ พลาซ่า",
+   "en": "Lee Gardens Plaza",
+   "osmName": "Lee Gardens Plaza",
+   "lat": 7.0058506,
+   "lon": 100.4716957,
+   "x": 187.36270626758304,
+   "y": -458.88551417166514
+  },
+  {
+   "id": "songkla",
+   "name": "โรงพยาบาลสงขลานครินทร์",
+   "en": "Songklanagarind Hospital",
+   "osmName": "โรงพยาบาลสงขลานครินทร์",
+   "lat": 7.006663,
+   "lon": 100.4945493,
+   "x": 2712.521840524859,
+   "y": -369.0415387262839
+  },
+  {
+   "id": "psu",
+   "name": "ม.สงขลานครินทร์",
+   "en": "Prince of Songkla University",
+   "osmName": "มหาวิทยาลัยสงขลานครินทร์",
+   "lat": 7.0096597,
+   "lon": 100.4959583,
+   "x": 2868.2062499901494,
+   "y": -37.63405322995814
+  },
+  {
+   "id": "cityhall",
+   "name": "เทศบาลนครหาดใหญ่",
+   "en": "Hat Yai City Municipality",
+   "osmName": "Townhall Hat Yai",
+   "lat": 7.0155618,
+   "lon": 100.4728669,
+   "x": 316.7719187350194,
+   "y": 615.0839766520778
+  },
+  {
+   "id": "bus",
+   "name": "สถานีขนส่งหาดใหญ่",
+   "en": "Hat Yai Bus Terminal",
+   "osmName": "ท่ารถหอนาฬิกาหาดใหญ่",
+   "lat": 7.0119997,
+   "lon": 100.470179,
+   "x": 19.778218094263824,
+   "y": 221.14844620642907
+  }
+ ],
+ "places": [
+  {
+   "name": "หาดใหญ่",
+   "en": "Hat Yai",
+   "kind": "city",
+   "x": -111.71930902114768,
+   "y": -280.41406220985107
+  },
+  {
+   "name": "บ้านหน้าควน",
+   "en": "Ban Nakuan",
+   "kind": "village",
+   "x": -2651.6292372188755,
+   "y": -1606.984026094506
+  },
+  {
+   "name": "บ้านคลองหวะ ",
+   "en": "Ban Khlong Wa",
+   "kind": "village",
+   "x": 604.2742845472302,
+   "y": -3340.7161815070804
+  },
+  {
+   "name": "บ้านคลองเปล",
+   "en": "Ban Khlong Ple",
+   "kind": "village",
+   "x": 3470.005494955583,
+   "y": 3848.8588432210818
+  },
+  {
+   "name": "บ้านน้ำน้อย",
+   "en": "",
+   "kind": "village",
+   "x": 5659.896209309611,
+   "y": 6740.200320364898
+  },
+  {
+   "name": "บ้านคลองแห",
+   "en": "Ban Klong Hae",
+   "kind": "village",
+   "x": 751.1413654997202,
+   "y": 3980.1854321445367
+  },
+  {
+   "name": "บ้านเกาะหมี",
+   "en": "Ban Ko Mi",
+   "kind": "village",
+   "x": 3434.4599488056538,
+   "y": 5236.076808255767
+  },
+  {
+   "name": "บ้านควนลัง",
+   "en": "Ban Khuan Lang",
+   "kind": "village",
+   "x": -5970.734662616979,
+   "y": -1931.9330081860542
+  },
+  {
+   "name": "บ้านท่าไทร",
+   "en": "Ban Ta Sai",
+   "kind": "village",
+   "x": -1774.3823951234162,
+   "y": 3377.974225977298
+  },
+  {
+   "name": "บ้านบางแฟบ",
+   "en": "Ban Bang Faep",
+   "kind": "village",
+   "x": -3183.7958953526027,
+   "y": 200.6780869561907
+  },
+  {
+   "name": "บ้านโคกเมา",
+   "en": "Ban Kok Mao",
+   "kind": "village",
+   "x": -3215.8940649414435,
+   "y": 2413.4122251931385
+  },
+  {
+   "name": "บ้านดินลาน",
+   "en": "Ban Din Lan",
+   "kind": "village",
+   "x": -4236.339625750264,
+   "y": 3765.5065484239904
+  },
+  {
+   "name": "คลองแห",
+   "en": "Khlong Hae",
+   "kind": "town",
+   "x": 581.5459076655042,
+   "y": 3872.956581095955
+  },
+  {
+   "name": "บ้านพรุ",
+   "en": "Ban Phru",
+   "kind": "town",
+   "x": 273.87859882363773,
+   "y": -6711.878013482071
+  }
+ ],
+ "attribution": [
+  "Terrain: Copernicus GLO-30 DEM © DLR e.V. 2010-2014 and © Airbus 2014-2018, provided under COPERNICUS by the European Union and ESA",
+  "Buildings, canals, landmarks: © OpenStreetMap contributors (ODbL)",
+  "Imagery: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+ ]
+}

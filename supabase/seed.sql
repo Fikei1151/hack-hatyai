@@ -1,0 +1,2 @@
+-- Preset scenarios are defined in src/sim/presets.ts and upserted by the app on first load
+-- (see syncPresets in src/lib/repository.ts), so there is a single source of truth.
