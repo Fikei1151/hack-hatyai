@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { CityData } from './cityData';
+import { gridOrigin, type CityData } from './cityData';
 import { ATMOSPHERE, NOISE, RAIN_FIELD } from './glsl';
 import { SHADOW_GLSL } from './Shadows';
 
@@ -51,8 +51,9 @@ export class Terrain {
     const { nx, ny, cell } = meta;
     const pos = new Float32Array(nx * ny * 3);
     const nor = new Float32Array(nx * ny * 3);
-    const x0 = -meta.width / 2 + cell / 2;
-    const y0 = -meta.height / 2 + cell / 2;
+    const g = gridOrigin(meta);
+    const x0 = g.x0 + cell / 2;
+    const y0 = g.y0 + cell / 2;
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
         const id = j * nx + i;

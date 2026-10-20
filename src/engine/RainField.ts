@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createRng, type Rng } from '../sim/rng';
 import type { Forcing, RainPattern } from '../sim/types';
-import type { CityMeta } from './cityData';
+import { gridCentre, type CityMeta } from './cityData';
 
 const PATTERN_ID: Record<RainPattern, number> = { uniform: 0, storm_cells: 1, orographic: 2, squall_line: 3 };
 const MAX_CELLS = 16;
@@ -42,6 +42,9 @@ export class RainField {
   private seed: number;
   private phaseKey = '';
   private readonly half: number;
+  /** middle of the domain (local metres): storms and squall lines are placed around it */
+  private readonly cx: number;
+  private readonly cy: number;
   private readonly elevSamples: Float32Array;
 
   constructor(
@@ -52,6 +55,7 @@ export class RainField {
     this.seed = seed;
     this.rng = createRng(seed);
     this.half = Math.max(meta.width, meta.height) / 2;
+    ({ x: this.cx, y: this.cy } = gridCentre(meta));
     // coarse 24×24 elevation sample for orographic normalisation
     this.elevSamples = new Float32Array(24 * 24);
     for (let j = 0; j < 24; j++)
@@ -104,7 +108,7 @@ export class RainField {
         c.x += c.vx * dt;
         c.y += c.vy * dt;
         c.age += dt;
-        const out = Math.abs(c.x) > this.half + 3 * c.sigma || Math.abs(c.y) > this.half + 3 * c.sigma;
+        const out = Math.abs(c.x - this.cx) > this.half + 3 * c.sigma || Math.abs(c.y - this.cy) > this.half + 3 * c.sigma;
         if (c.age > c.life || out) this.cells[k] = this.spawn(mx, my, speed, false);
       }
       this.cells.forEach((c, k) => {
@@ -118,7 +122,7 @@ export class RainField {
 
     if (f.pattern === 'squall_line') {
       const cycle = 2 * this.half + 16000;
-      u.uSquallPos.value = ((f.phaseT * speed) % cycle) - this.half - 8000;
+      u.uSquallPos.value = this.cx * mx + this.cy * my + ((f.phaseT * speed) % cycle) - this.half - 8000;
     }
     u.uRainNorm.value = 1 / Math.max(0.05, this.meanShape(f.pattern));
   }
@@ -142,8 +146,8 @@ export class RainField {
     const n = 20;
     for (let j = 0; j < n; j++)
       for (let i = 0; i < n; i++) {
-        const x = ((i + 0.5) / n - 0.5) * this.meta.width;
-        const y = ((j + 0.5) / n - 0.5) * this.meta.height;
+        const x = this.cx + ((i + 0.5) / n - 0.5) * this.meta.width;
+        const y = this.cy + ((j + 0.5) / n - 0.5) * this.meta.height;
         s += this.shapeAt(x, y);
       }
     return s / (n * n);
@@ -168,14 +172,14 @@ export class RainField {
     let x: number;
     let y: number;
     if (anywhere) {
-      x = r.range(-this.half, this.half);
-      y = r.range(-this.half, this.half);
+      x = this.cx + r.range(-this.half, this.half);
+      y = this.cy + r.range(-this.half, this.half);
     } else {
       // enter from the upwind side
       const along = -(this.half + 1.5 * sigma);
       const across = r.range(-this.half, this.half);
-      x = mx * along - my * across;
-      y = my * along + mx * across;
+      x = this.cx + mx * along - my * across;
+      y = this.cy + my * along + mx * across;
     }
     const jitter = r.range(-0.35, 0.35);
     const sp = speed * r.range(0.7, 1.3);

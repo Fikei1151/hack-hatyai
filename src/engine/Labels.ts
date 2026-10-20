@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { sampleGrid, type CityData, type Place, type PlaceCategory } from './cityData';
+import { gridOrigin, sampleGrid, type CityData, type Place, type PlaceCategory } from './cityData';
 
 export interface LabelHandlers {
   onPoiClick: (id: string) => void;
@@ -106,7 +106,8 @@ export class Labels {
     const canals = new Map<string, [number, number][]>();
     for (const w of city.waterways) {
       if (!w.name || !/คลอง|Klong|Khlong/i.test(w.name)) continue;
-      const inside = w.pts.filter(([x, y]) => Math.abs(x) < city.meta.width / 2 - 150 && Math.abs(y) < city.meta.height / 2 - 150);
+      const { x0, y0 } = gridOrigin(city.meta);
+      const inside = w.pts.filter(([x, y]) => x > x0 + 150 && x < x0 + city.meta.width - 150 && y > y0 + 150 && y < y0 + city.meta.height - 150);
       if (inside.length < 2) continue;
       const key = w.name.replace('อุ่ตะเภา', 'อู่ตะเภา');
       const cur = canals.get(key);

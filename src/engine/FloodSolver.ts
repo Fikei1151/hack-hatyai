@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { CityData } from './cityData';
+import { gridOrigin, type CityData } from './cityData';
 import { NOISE, RAIN_FIELD } from './glsl';
 import type { RainField } from './RainField';
 
@@ -17,6 +17,9 @@ import type { RainField } from './RainField';
 
 const MAX_SOURCES = 12;
 const MAX_CLOSED = 6;
+/** flood regulators (gated channel cross-sections) and the grid faces they span */
+const MAX_REGULATORS = 4;
+const MAX_REG_FACES = 32;
 /** edges stay closed this far (m) around each river inflow point */
 const INFLOW_VALLEY_RADIUS = 2000;
 
@@ -30,7 +33,7 @@ precision highp float;
 precision highp int;
 precision highp sampler2D;
 uniform sampler2D uStatic;   // r bed z, g manning n, b imperviousness, a channel flag
-uniform sampler2D uStatic2;  // r porosity, g building fraction, b water body flag
+uniform sampler2D uStatic2;  // r porosity, g building fraction, b water body flag, a regulator face code
 uniform sampler2D uState;
 uniform sampler2D uFlux;
 uniform ivec2 uGrid;
@@ -67,11 +70,55 @@ float cellH(ivec2 c) { return texelFetch(uState, clamp(c, ivec2(0), uGrid - 1), 
 float cellP(ivec2 c) { return texelFetch(uStatic2, clamp(c, ivec2(0), uGrid - 1), 0).r; }
 vec4 cellQ(ivec2 c) { return texelFetch(uFlux, clamp(c, ivec2(0), uGrid - 1), 0); }
 
+// Interior face fluxes of cell c (east face: c → c+x, north face: c → c+y), as main() computes them;
+// used to total a regulator's cross-section.
+float eastQ(ivec2 c) {
+  ivec2 e = c + ivec2(1, 0);
+  vec4 s = cellZ(c);
+  vec4 se = cellZ(e);
+  return faceQ(cellQ(c).r, cellQ(c - ivec2(1, 0)).r, cellQ(e).r, s.r, cellH(c), cellP(c), se.r, cellH(e), cellP(e), 0.5 * (s.g + se.g));
+}
+float northQ(ivec2 c) {
+  ivec2 nn = c + ivec2(0, 1);
+  vec4 s = cellZ(c);
+  vec4 sn = cellZ(nn);
+  return faceQ(cellQ(c).g, cellQ(c - ivec2(0, 1)).g, cellQ(nn).g, s.r, cellH(c), cellP(c), sn.r, cellH(nn), cellP(nn), 0.5 * (s.g + sn.g));
+}
+
+// Flood regulators: the channel discharge through a gated cross-section may not exceed its capacity
+// (overbank flow around the structure stays free). Every face of a regulator evaluates all of the
+// regulator's faces, so the cap holds exactly within the step.
+uniform vec4 uRegFace[${MAX_REG_FACES}]; // cell i, cell j, face (0 east, 1 north), ±(regulator + 1): sign = downstream
+uniform int uNumRegFaces;
+uniform float uRegCap[${MAX_REGULATORS}]; // m³/s, ≤ 0 = fully open
+float regulatorQ(int k) {
+  float total = 0.0;
+  for (int m = 0; m < ${MAX_REG_FACES}; m++) {
+    if (m >= uNumRegFaces) break;
+    vec4 f = uRegFace[m];
+    if (int(abs(f.w)) - 1 != k) continue;
+    ivec2 c = ivec2(f.xy);
+    total += sign(f.w) * (f.z < 0.5 ? eastQ(c) : northQ(c)) * uDx;
+  }
+  return total;
+}
+float regulated(float q, float code) {
+  int m = int(code + 0.5) - 1;
+  if (m < 0) return q;
+  vec4 f = uRegFace[m];
+  int k = int(abs(f.w)) - 1;
+  float cap = uRegCap[k];
+  if (cap <= 0.0 || sign(f.w) * q <= 0.0) return q;
+  float total = regulatorQ(k);
+  return total > cap ? q * cap / total : q;
+}
+
 // Domain edges.
-// North: the downstream outlet towards Songkhla Lake — free outflow down a gentle slope, held up
-// by the lake stage when the lake is higher (backwater can enter up to that level, no further).
+// North: the downstream outlet. Builds that reach Songkhla Lake put this edge in open water and
+// uLakeStage is the lake level; older builds stop ~10 km short and pass a backwater rating instead
+// (Engine.outletStage). Free outflow down a gentle slope, held up by uLakeStage when that is higher
+// (backwater can enter up to that level, no further).
 float outletQ(float q, float ze, float he, float pe, float n) {
-  // ~10 km of lowland channel still lies between this edge and the lake: a gentle outlet slope
   float zg = ze - 0.00012 * uDx;
   float eta = max(zg + he, uLakeStage);
   return faceQ(q, q, q, ze, he, pe, zg, max(0.0, eta - zg), 1.0, n);
@@ -104,12 +151,14 @@ void main() {
   float p = cellP(c);
   vec4 q = cellQ(c);
   vec4 res = vec4(0.0);
+  float reg = texelFetch(uStatic2, c, 0).a; // regulator face codes: east + 64 × north
 
   // east face (c → c+x)
   if (c.x < uGrid.x - 1) {
     ivec2 e = c + ivec2(1, 0);
     vec4 se = cellZ(e);
     res.r = faceQ(q.r, cellQ(c - ivec2(1, 0)).r, cellQ(e).r, s.r, h, p, se.r, cellH(e), cellP(e), 0.5 * (s.g + se.g));
+    if (reg > 0.0) res.r = regulated(res.r, mod(reg, 64.0));
   } else {
     res.r = max(0.0, edgeOutQ(q.r, c, ivec2(-1, 0), h, p, s.g));
   }
@@ -118,6 +167,7 @@ void main() {
     ivec2 nn = c + ivec2(0, 1);
     vec4 sn = cellZ(nn);
     res.g = faceQ(q.g, cellQ(c - ivec2(0, 1)).g, cellQ(nn).g, s.r, h, p, sn.r, cellH(nn), cellP(nn), 0.5 * (s.g + sn.g));
+    if (reg > 0.0) res.g = regulated(res.g, floor(reg / 64.0));
   } else {
     res.g = outletQ(q.g, s.r, h, p, s.g);
   }
@@ -207,6 +257,11 @@ export class FloodSolver {
   readonly staticTex: THREE.DataTexture;
   readonly static2Tex: THREE.DataTexture;
   readonly channelCells: number;
+  /** local metres of the grid's south-west corner */
+  private readonly x0: number;
+  private readonly y0: number;
+  private readonly regulatorFaces: THREE.Vector4[];
+  private regulatorFaceCount = 0;
   private state: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
   private flux: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
   private cur = 0;
@@ -230,6 +285,9 @@ export class FloodSolver {
     this.nx = meta.nx;
     this.ny = meta.ny;
     this.dx = meta.cell;
+    const { x0, y0 } = gridOrigin(meta);
+    this.x0 = x0;
+    this.y0 = y0;
     const n = this.nx * this.ny;
 
     const s1 = new Float32Array(n * 4);
@@ -257,6 +315,7 @@ export class FloodSolver {
       this.initial[id * 4 + 2] = -1;
     }
     this.channelCells = channels;
+    this.regulatorFaces = this.buildRegulators(landcover, s2);
     // canals start with some base flow (~35 % of their depth below the banks, from the build script);
     // the engine then spins the network up in dry weather and adopts that as the true t = 0 state
     for (let id = 0; id < n; id++) {
@@ -290,9 +349,9 @@ export class FloodSolver {
       uDt: { value: 1 },
       uG: { value: 9.81 },
     };
-    const closed = meta.inflows.slice(0, MAX_CLOSED).map(
-      (f) => new THREE.Vector3((f.x + meta.width / 2) / this.dx - 0.5, (f.y + meta.height / 2) / this.dx - 0.5, INFLOW_VALLEY_RADIUS / this.dx),
-    );
+    const closed = meta.inflows
+      .slice(0, MAX_CLOSED)
+      .map((f) => new THREE.Vector3((f.x - x0) / this.dx - 0.5, (f.y - y0) / this.dx - 0.5, INFLOW_VALLEY_RADIUS / this.dx));
     while (closed.length < MAX_CLOSED) closed.push(new THREE.Vector3());
     this.fluxMat = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -307,6 +366,9 @@ export class FloodSolver {
         uLakeStage: { value: 1.0 },
         uClosed: { value: closed },
         uNumClosed: { value: Math.min(MAX_CLOSED, meta.inflows.length) },
+        uRegFace: { value: this.regulatorFaces },
+        uNumRegFaces: { value: this.regulatorFaceCount },
+        uRegCap: { value: Array.from({ length: MAX_REGULATORS }, (_, k) => this.regulators[k]?.capM3s ?? 0) },
       },
     });
     this.depthMat = new THREE.RawShaderMaterial({
@@ -324,7 +386,7 @@ export class FloodSolver {
         uChannelInject: { value: 0 },
         uSources: { value: Array.from({ length: MAX_SOURCES }, () => new THREE.Vector4()) },
         uNumSources: { value: 0 },
-        uOrigin: { value: new THREE.Vector2(-meta.width / 2 + this.dx / 2, -meta.height / 2 + this.dx / 2) },
+        uOrigin: { value: new THREE.Vector2(x0 + this.dx / 2, y0 + this.dx / 2) },
         ...rain.uniforms,
       },
     });
@@ -338,6 +400,57 @@ export class FloodSolver {
     this.quad.frustumCulled = false;
     this.scene.add(this.quad);
     this.reset();
+  }
+
+  /**
+   * Faces of each regulator's cross-section: channel-to-channel faces whose cells lie on opposite
+   * sides of the line through the regulator perpendicular to the channel. Writes the face codes into
+   * static2.a (east entry + 64 × north entry, entries 1-based) and returns the uniform entries.
+   */
+  private buildRegulators(landcover: Uint8Array, s2: Float32Array): THREE.Vector4[] {
+    const { nx, ny, dx, x0, y0 } = this;
+    const faces: THREE.Vector4[] = [];
+    const channel = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && landcover[(j * nx + i) * 4 + 1] > 0;
+    this.regulators.forEach((r, k) => {
+      const along = (i: number, j: number) => (x0 + (i + 0.5) * dx - r.x) * r.tx + (y0 + (j + 0.5) * dx - r.y) * r.ty;
+      const ci = Math.floor((r.x - x0) / dx);
+      const cj = Math.floor((r.y - y0) / dx);
+      const R = Math.ceil(r.halfWidth / dx) + 2;
+      for (let j = cj - R; j <= cj + R; j++)
+        for (let i = ci - R; i <= ci + R; i++)
+          for (const [di, dj, face] of [
+            [1, 0, 0],
+            [0, 1, 1],
+          ]) {
+            const i2 = i + di;
+            const j2 = j + dj;
+            if (i < 1 || j < 1 || i2 >= nx - 1 || j2 >= ny - 1 || !channel(i, j) || !channel(i2, j2)) continue;
+            const a = along(i, j);
+            const b = along(i2, j2);
+            if (a * b > 0 || a === b) continue; // both cells on the same side of the cross-section
+            const mx = x0 + (i + 0.5 + di / 2) * dx - r.x;
+            const my = y0 + (j + 0.5 + dj / 2) * dx - r.y;
+            if (Math.abs(mx * r.ty - my * r.tx) > r.halfWidth + dx) continue; // another channel nearby
+            if (faces.length >= MAX_REG_FACES) continue;
+            faces.push(new THREE.Vector4(i, j, face, (b > a ? 1 : -1) * (k + 1)));
+            s2[(j * nx + i) * 4 + 3] += face === 0 ? faces.length : faces.length * 64;
+          }
+    });
+    this.regulatorFaceCount = faces.length;
+    const out = faces.slice();
+    while (out.length < MAX_REG_FACES) out.push(new THREE.Vector4(0, 0, 0, 0));
+    return out;
+  }
+
+  /** Regulators in this city (gate capacities can be changed while running). */
+  get regulators() {
+    return (this.city.meta.regulators ?? []).slice(0, MAX_REGULATORS);
+  }
+
+  /** Set a regulator's channel capacity in m³/s (≤ 0 opens it fully). */
+  setRegulatorCap(id: string, m3s: number) {
+    const k = this.regulators.findIndex((r) => r.id === id);
+    if (k >= 0) (this.fluxMat.uniforms.uRegCap.value as number[])[k] = m3s;
   }
 
   get stateTexture(): THREE.Texture {
@@ -389,8 +502,8 @@ export class FloodSolver {
     const n = Math.min(MAX_SOURCES, f.sources.length);
     for (let k = 0; k < n; k++) {
       const s = f.sources[k];
-      const ci = Math.round((s.x + this.city.meta.width / 2) / this.dx - 0.5);
-      const cj = Math.round((s.y + this.city.meta.height / 2) / this.dx - 0.5);
+      const ci = Math.round((s.x - this.x0) / this.dx - 0.5);
+      const cj = Math.round((s.y - this.y0) / this.dx - 0.5);
       const cells = this.receivingCells(ci, cj, s.halfWidth, s.channelOnly);
       const channelOnly = s.channelOnly && cells > 0;
       const count = channelOnly ? cells : (2 * s.halfWidth + 1) ** 2;

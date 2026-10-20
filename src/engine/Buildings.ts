@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { sampleGrid, type CityData } from './cityData';
+import { gridOrigin, sampleGrid, type CityData } from './cityData';
 import { ATMOSPHERE, DEPTH_RAMP_GLSL, NOISE } from './glsl';
 import { SHADOW_GLSL, SHADOW_LAYER } from './Shadows';
 
@@ -104,6 +104,7 @@ export class Buildings {
     this.centroidCell = new Int32Array(B.count);
     const W = meta.width;
     const H = meta.height;
+    const { x0: gx0, y0: gy0 } = gridOrigin(meta);
     const chunks: Chunk[] = Array.from({ length: CHUNKS * CHUNKS }, () => ({
       pos: new Grow<Float32Array>(Float32Array),
       nor: new Grow<Int8Array>(Int8Array),
@@ -130,8 +131,8 @@ export class Buildings {
       }
       cx /= n;
       cy /= n;
-      const cu = (cx + W / 2) / W;
-      const cv = (cy + H / 2) / H;
+      const cu = (cx - gx0) / W;
+      const cv = (cy - gy0) / H;
       const ci = Math.min(meta.nx - 1, Math.max(0, Math.floor(cu * meta.nx)));
       const cj = Math.min(meta.ny - 1, Math.max(0, Math.floor(cv * meta.ny)));
       this.centroidCell[b] = cj * meta.nx + ci;

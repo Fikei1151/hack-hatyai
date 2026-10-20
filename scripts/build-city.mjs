@@ -5,8 +5,9 @@
 //   • Canals/ponds   — OpenStreetMap waterways, burned into the DEM so they actually carry water
 //   • Landmarks      — OpenStreetMap
 //   • Imagery        — Esri World Imagery tiles
+//   • Trees          — planted where the imagery shows tree canopy (scripts/lib/vegetation.mjs)
 //
-// Usage: node scripts/build-city.mjs [--cell 20] [--refresh]
+// Usage: node scripts/build-city.mjs [--cell 20] [--refresh] [--trees 300000]
 // Output: public/city/hatyai/*  (raw API responses are cached in .cache/)
 
 import fs from 'node:fs/promises';
@@ -17,6 +18,7 @@ import sharp from 'sharp';
 import { makeProjection, lonToTileX, latToTileY, hash01, polygonArea, polygonCentroid } from './lib/geo.mjs';
 import { overpass, cached, fetchBuffer, mapLimit } from './lib/fetchers.mjs';
 import * as R from './lib/raster.mjs';
+import { plantTrees, encodeTrees } from './lib/vegetation.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = Object.fromEntries(
@@ -27,16 +29,21 @@ const CITY = {
   id: 'hatyai',
   name: 'Hat Yai',
   nameTh: 'หาดใหญ่',
-  center: { lat: 7.01, lon: 100.47 },
-  halfSize: 7200, // metres → 14.4 km × 14.4 km domain
+  center: { lat: 7.01, lon: 100.47 }, // projection origin: local (0, 0)
+  // simulation domain in local metres. It runs north past the U-Taphao / R.1 mouths into Songkhla
+  // Lake (south shore ≈ 7.15° N), so the lake level itself is the downstream boundary
+  domain: { west: -7200, east: 7200, south: -7200, north: Number(args.north ?? 17800) },
   cell: Number(args.cell ?? 20),
   detail: { lat: 7.0065, lon: 100.4725, halfSize: 2400 }, // high-res imagery over the city core
 };
 
-// RID telemetry gauges inside the domain (ThaiWater station ids) with official warning levels (m MSL)
+// RID / HII telemetry gauges (ThaiWater station ids) with warning levels or lowest bank (m MSL);
+// only those inside the domain are kept
 const GAUGES = [
   { id: 'x44', code: 'X.44', name: 'บ้านหาดใหญ่ใน (คลองอู่ตะเภา)', stationId: 2591, lat: 7.00218, lon: 100.456062, watch: 6.0, critical: 7.4, bank: 8.3 },
   { id: 'x174', code: 'X.174', name: 'บ้านคลองหวะ (คลองหวะ)', stationId: 2590, lat: 6.98637, lon: 100.481857, watch: 7.4, critical: 8.88, bank: 8.88 },
+  { id: 'one037', code: 'ONE037', name: 'สะพานข้ามคลองอู่ตะเภา (ปากคลอง)', stationId: 1109526, lat: 7.134997, lon: 100.45321, watch: 0.84, critical: 0.84, bank: 0.84 },
+  { id: 'sla007', code: 'SLA007', name: 'บางกล่ำ', stationId: 858, lat: 7.079418, lon: 100.42788, watch: 1.59, critical: 1.59, bank: 1.59 },
 ];
 // building type codes stored in buildings.bin (mirrored in src/engine/cityData.ts)
 const BTYPE = { generic: 0, house: 1, shophouse: 2, commercial: 3, industrial: 4, religious: 5, education: 6, hospital: 7, civic: 8, shed: 9 };
@@ -61,16 +68,21 @@ const t0 = Date.now();
 const step = (msg) => log(`\n[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 
 const proj = makeProjection(CITY.center.lat, CITY.center.lon);
-const nx = Math.round((2 * CITY.halfSize) / CITY.cell);
-const ny = nx;
-const grid = new R.Grid(nx, ny, CITY.cell, -(nx * CITY.cell) / 2, -(ny * CITY.cell) / 2);
+const nx = Math.round((CITY.domain.east - CITY.domain.west) / CITY.cell);
+const ny = Math.round((CITY.domain.north - CITY.domain.south) / CITY.cell);
+const grid = new R.Grid(nx, ny, CITY.cell, CITY.domain.west, CITY.domain.south);
+const centre = { x: grid.x0 + (nx * CITY.cell) / 2, y: grid.y0 + (ny * CITY.cell) / 2 };
 const [south, west] = proj.toLatLon(grid.x0, grid.y0);
 const [north, east] = proj.toLatLon(grid.x0 + nx * CITY.cell, grid.y0 + ny * CITY.cell);
 const bbox = `${south.toFixed(5)},${west.toFixed(5)},${north.toFixed(5)},${east.toFixed(5)}`;
 // waterways are fetched with a margin so canals entering the domain are complete
 const [mS, mW] = proj.toLatLon(grid.x0 - 4000, grid.y0 - 4000);
-const [mN, mE] = proj.toLatLon(-grid.x0 + 4000, -grid.y0 + 4000);
+const [mN, mE] = proj.toLatLon(grid.x0 + nx * CITY.cell + 4000, grid.y0 + ny * CITY.cell + 4000);
 const bboxWide = `${mS.toFixed(5)},${mW.toFixed(5)},${mN.toFixed(5)},${mE.toFixed(5)}`;
+
+// OSM caches are per domain (the original 14.4 km square keeps its old file names)
+const legacyDomain = grid.x0 === -7200 && grid.y0 === -7200 && nx * CITY.cell === 14400 && ny * CITY.cell === 14400;
+const osmCache = (name) => path.join(CACHE, legacyDomain ? `${name}.json` : `${name}_${grid.x0}_${grid.y0}_${nx * CITY.cell}x${ny * CITY.cell}.json`);
 
 await fs.mkdir(OUT, { recursive: true });
 log(`City: ${CITY.nameTh} (${CITY.name})  grid ${nx}×${ny} @ ${CITY.cell} m  bbox ${bbox}`);
@@ -86,6 +98,19 @@ for (let j = 0; j < ny; j++)
     zRaw[j * nx + i] = sampleDEM(lat, lon);
   }
 log(`  elevation range ${stats(zRaw).min.toFixed(1)} … ${stats(zRaw).max.toFixed(1)} m (EGM2008)`);
+// optional bare-earth model (--dem gedtm): OpenLandMap GEDTM30 v1.2, an ensemble DTM at the same
+// 1″ grid and datum (EGM2008), sampled alongside so the conditioning below can use it
+let zGedtm = null;
+if (args.dem === 'gedtm') {
+  step('Terrain: reading OpenLandMap GEDTM30 bare-earth DTM window…');
+  const sampleG = await openGedtm({ south: south - 0.01, west: west - 0.01, north: north + 0.01, east: east + 0.01 });
+  zGedtm = new Float32Array(grid.size);
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      const [x, y] = grid.center(i, j);
+      zGedtm[j * nx + i] = sampleG(...proj.toLatLon(x, y));
+    }
+}
 
 // ─────────────────────────────────────────────────────────────── 2. OSM
 step('OpenStreetMap: landmarks…');
@@ -97,7 +122,7 @@ const poiJson = await overpass(
     nwr["amenity"="marketplace"](${bbox});
     node["place"~"^(suburb|neighbourhood|quarter|village|town|city)$"](${bbox});
   );out center tags;`,
-  path.join(CACHE, 'osm_pois.json'),
+  osmCache('osm_pois'),
   { refresh, log },
 );
 const { pois, places, downtown } = pickLandmarks(poiJson.elements);
@@ -106,26 +131,26 @@ log(`  ${pois.length} landmarks, ${places.length} place labels; downtown anchor 
 step('OpenStreetMap: waterways…');
 const wwJson = await overpass(
   `[out:json][timeout:240];(way["waterway"~"^(river|canal|stream|drain|ditch)$"](${bboxWide}););out tags geom;`,
-  path.join(CACHE, 'osm_waterways.json'),
+  osmCache('osm_waterways'),
   { refresh, log },
 );
 step('OpenStreetMap: water bodies…');
 const wbJson = await overpass(
   `[out:json][timeout:240];(way["natural"="water"](${bbox});relation["natural"="water"](${bbox});way["landuse"~"^(reservoir|basin)$"](${bbox}););out geom;`,
-  path.join(CACHE, 'osm_waterbodies.json'),
+  osmCache('osm_waterbodies'),
   { refresh, log },
 );
 step('OpenStreetMap: building footprints (large query)…');
 const bJson = await overpass(
   `[out:json][timeout:600][maxsize:1073741824];(way["building"](${bbox});relation["building"]["type"="multipolygon"](${bbox}););out geom qt;`,
-  path.join(CACHE, 'osm_buildings.json'),
+  osmCache('osm_buildings'),
   { refresh, log },
 );
 
 step('OpenStreetMap: roads…');
 const roadJson = await overpass(
   `[out:json][timeout:300];(way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|pedestrian)$"](${bbox}););out tags geom qt;`,
-  path.join(CACHE, 'osm_roads.json'),
+  osmCache('osm_roads'),
   { refresh, log },
 );
 step('OpenStreetMap: important places…');
@@ -140,7 +165,7 @@ const placeJson = await overpass(
     nwr["office"="government"](${bbox});
     nwr["emergency"="assembly_point"](${bbox});
   );out center tags;`,
-  path.join(CACHE, 'osm_places.json'),
+  osmCache('osm_places'),
   { refresh, log },
 );
 
@@ -190,6 +215,18 @@ for (const el of wwJson.elements) {
 const zDtm = new Float32Array(grid.size);
 // calibrated so the Kim Yong / clock-tower area sits near 9 m MSL (≈1 m deep when X.44 peaked at 9.97 m in 2025)
 for (let id = 0; id < grid.size; id++) zDtm[id] = zRaw[id] - (bankZone[id] ? 0 : 1.0 * dsmBias[id]);
+if (zGedtm) {
+  // ground cannot lie above either estimate: GEDTM30 already strips part of the canopy and buildings,
+  // the OSM correction strips what it left in the dense blocks. River banks keep the surface model,
+  // which carries the real crests (RID X.44: 7.15 / 8.66 m MSL).
+  let lowered = 0;
+  for (let id = 0; id < grid.size; id++) {
+    if (bankZone[id] || !Number.isFinite(zGedtm[id])) continue;
+    if (zGedtm[id] < zDtm[id] - 0.05) lowered++;
+    zDtm[id] = Math.min(zDtm[id], zGedtm[id]);
+  }
+  log(`  GEDTM30 lowered ${((100 * lowered) / grid.size).toFixed(0)} % of cells below the corrected surface model`);
+}
 // no building-shaped holes: in built-up areas the ground may not sit more than 1 m below its
 // 150 m neighbourhood average
 {
@@ -276,6 +313,10 @@ for (const w of waterways) {
   R.burnChannel(zCond, channelMask, grid, w.prof, { width: effW, depth: effD, bankWidth: Math.max(10, CITY.cell * 0.75), kind: w.lined ? 2 : 1, kindMask: channelKind });
 }
 log(`  burned ${waterways.length} waterways (${(waterways.reduce((s, w) => s + pathLen(w.pts), 0) / 1000).toFixed(0)} km)`);
+if (args['surveyed-bed'] !== 'off') {
+  const n = cutSurveyedBed(waterways);
+  log(`  U-Taphao bed cut to the RID/HII gauge surveys in ${n} channel cells`);
+}
 
 const waterPolys = [];
 for (const el of wbJson.elements) {
@@ -295,14 +336,21 @@ for (let id = 0; id < grid.size; id++)
     }
   }
 log(`  ${waterPolys.length} water bodies (${((pondCells * CITY.cell * CITY.cell) / 1e6).toFixed(2)} km² of ponds lowered 1.5 m)`);
+// when most of the north edge is open water the domain reaches Songkhla Lake and its level is the boundary
+let northWater = 0;
+for (let i = 0; i < nx; i++) if (waterMask[(ny - 1) * nx + i]) northWater++;
+const lakeOutlet = northWater / nx > 0.4;
+log(`  north edge ${((100 * northWater) / nx).toFixed(0)} % open water → outlet: ${lakeOutlet ? 'Songkhla Lake level' : 'backwater rating'}`);
 
 // ─────────────────────────────────────────────────────────────── 5. Inflow points
 const inflows = findInflows(waterways);
 for (const f of inflows) log(`  inflow ${f.name}: (${f.x.toFixed(0)}, ${f.y.toFixed(0)}) share ${f.share}`);
+const regulators = findRegulators(waterways);
+for (const r of regulators) log(`  regulator ${r.name}: (${r.x}, ${r.y}) cap ${r.capM3s} m³/s`);
 
 // ─────────────────────────────────────────────────────────────── 6. Imagery
 step('Imagery: Esri World Imagery tiles…');
-const imgBase = await buildImagery('imagery_base.jpg', 15, { south, west, north, east }, 3072);
+const imgBase = await buildImagery('imagery_base.jpg', 15, { south, west, north, east }, Math.min(5120, Math.round((Math.max(nx, ny) * CITY.cell) / 4.7)));
 const [dS, dW] = proj.toLatLon(...proj.toLocal(CITY.detail.lat, CITY.detail.lon).map((v) => v - CITY.detail.halfSize));
 const [dN, dE] = proj.toLatLon(...proj.toLocal(CITY.detail.lat, CITY.detail.lon).map((v) => v + CITY.detail.halfSize));
 const imgDetail = await buildImagery('imagery_detail.jpg', 17, { south: dS, west: dW, north: dN, east: dE }, 4096);
@@ -323,14 +371,14 @@ for (let id = 0; id < grid.size; id++) {
   lc[id * 4 + 3] = Math.round(Math.min(1, urban[id] * 2.2) * 255); // imperviousness
 }
 await fs.writeFile(path.join(OUT, 'landcover.rgba'), Buffer.from(lc.buffer));
-await fs.writeFile(path.join(OUT, 'buildings.bin'), encodeBuildings(buildings));
+await fs.writeFile(path.join(OUT, 'buildings.bin'), encodeBuildings(buildings, centre));
 const wwOut = waterways
   .filter((w) => w.name || w.depth >= 3)
   .map((w) => ({ name: w.name, type: w.type, width: w.width, depth: w.depth, pts: w.pts.map(([x, y]) => [Math.round(x), Math.round(y)]) }));
 await fs.writeFile(path.join(OUT, 'waterways.json'), JSON.stringify(wwOut));
 
 const roads = processRoads(roadJson.elements);
-await fs.writeFile(path.join(OUT, 'roads.bin'), encodeRoads(roads.list));
+await fs.writeFile(path.join(OUT, 'roads.bin'), encodeRoads(roads.list, centre));
 await fs.writeFile(path.join(OUT, 'road_labels.json'), JSON.stringify(roads.labels));
 log(`  ${roads.list.length} road segments, ${roads.labels.length} named main roads`);
 
@@ -339,6 +387,33 @@ await fs.writeFile(path.join(OUT, 'places.json'), JSON.stringify(keyPlaces));
 await fs.mkdir(path.join(ROOT, 'supabase', 'seeds'), { recursive: true });
 await fs.writeFile(path.join(ROOT, 'supabase', 'seeds', 'places.sql'), placesSeedSql(keyPlaces));
 log(`  ${keyPlaces.length} important places → public/city/${CITY.id}/places.json + supabase/seeds/places.sql`);
+
+// ─────────────────────────────────────────────────────────────── 8. Trees
+step('Trees: canopy from the imagery…');
+const raster = async (img) => {
+  const { data, info } = await sharp(path.join(OUT, img.file)).raw().toBuffer({ resolveWithObject: true });
+  return { data, width: info.width, height: info.height, channels: info.channels, rect: img };
+};
+const trees = plantTrees({
+  bounds: { x0: grid.x0, y0: grid.y0, x1: grid.x0 + nx * CITY.cell, y1: grid.y0 + ny * CITY.cell },
+  images: [await raster(imgBase), await raster(imgDetail)],
+  buildings: buildings.map((b) => b.pts),
+  water: waterPolys,
+  lines: [
+    ...roads.list.map((r) => ({ pts: r.pts, half: r.width / 2 + 0.5, kind: 'road' })),
+    ...waterways.map((w) => ({ pts: w.pts, half: w.width / 2 + 1, kind: 'water' })),
+  ],
+  onLand: (x, y) => {
+    const [fi, fj] = grid.frac(x, y);
+    return R.sampleBilinear(zBeforeBurn, nx, ny, fi, fj) - R.sampleBilinear(zCond, nx, ny, fi, fj) < 1;
+  },
+  // full density over the city core (the detailed imagery), fewer and larger trees further out
+  focus: { x: (imgDetail.x0 + imgDetail.x1) / 2, y: (imgDetail.y0 + imgDetail.y1) / 2, r0: 2000, r1: 4000 },
+  budget: Number(args.trees ?? 300000),
+  log,
+});
+await fs.writeFile(path.join(OUT, 'trees.bin'), encodeTrees(trees, centre));
+log(`  ${trees.count} trees → trees.bin`);
 
 const zs = stats(zCond);
 const meta = {
@@ -353,6 +428,9 @@ const meta = {
   ny,
   width: nx * CITY.cell,
   height: ny * CITY.cell,
+  x0: grid.x0,
+  y0: grid.y0,
+  outlet: lakeOutlet ? 'lake' : 'rating',
   bounds: { south, west, north, east },
   elevation: { min: zs.min, max: zs.max, p05: zs.p05, p50: zs.p50, p95: zs.p95 },
   files: {
@@ -363,16 +441,19 @@ const meta = {
     roads: 'roads.bin',
     roadLabels: 'road_labels.json',
     places: 'places.json',
+    trees: 'trees.bin',
     imageryBase: 'imagery_base.jpg',
     imageryDetail: 'imagery_detail.jpg',
   },
   imagery: { base: imgBase, detail: imgDetail },
   buildings: { count: buildings.length },
+  trees: { count: trees.count },
   inflows,
+  regulators,
   gauges: GAUGES.map((g) => {
     const [x, y] = proj.toLocal(g.lat, g.lon);
     return { ...g, x, y };
-  }),
+  }).filter((g) => grid.contains(g.x, g.y, CITY.cell * 4)),
   pois,
   places,
   attribution: [
@@ -389,6 +470,42 @@ for (const f of await fs.readdir(OUT)) {
 }
 
 // ═══════════════════════════════════════════════════════════════ helpers
+
+/** OpenLandMap GEDTM30 v1.2 (CC-BY 4.0): one global cloud-optimised GeoTIFF, float32 metres, EGM2008. */
+async function openGedtm(b) {
+  const url = 'https://s3.opengeohub.org/global/dtm/v1.2/gedtm_rf_m_30m_s_20060101_20151231_go_epsg.4326.3855_v1.2.tif';
+  const cacheFile = path.join(CACHE, `dem_gedtm30v12_${b.south.toFixed(3)}_${b.west.toFixed(3)}_${b.north.toFixed(3)}_${b.east.toFixed(3)}.json`);
+  const buf = await cached(
+    cacheFile,
+    async () => {
+      const tiff = await fromUrl(url);
+      const img = await tiff.getImage();
+      const [ox, oy] = img.getOrigin();
+      const [rx, ry] = img.getResolution();
+      const c0 = Math.floor((b.west - ox) / rx) - 2;
+      const c1 = Math.ceil((b.east - ox) / rx) + 2;
+      const r0 = Math.floor((b.north - oy) / ry) - 2;
+      const r1 = Math.ceil((b.south - oy) / ry) + 2;
+      const ras = await img.readRasters({ window: [c0, r0, c1, r1], samples: [0], interleave: true });
+      // nodata (3.4e38) over open water → null
+      return Buffer.from(JSON.stringify({ ox, oy, rx, ry, c0, r0, w: c1 - c0, h: r1 - r0, half: 0, data: Array.from(ras, (v) => (v > 1e30 ? null : Math.round(v * 100) / 100)) }));
+    },
+    { refresh },
+  );
+  const t = JSON.parse(buf.toString());
+  return (lat, lon) => {
+    const fc = Math.min(Math.max((lon - t.ox) / t.rx - 0.5 - t.c0, 0), t.w - 1);
+    const fr = Math.min(Math.max((lat - t.oy) / t.ry - 0.5 - t.r0, 0), t.h - 1);
+    const vals = [];
+    const c = Math.min(Math.floor(fc), t.w - 2);
+    const r = Math.min(Math.floor(fr), t.h - 2);
+    for (const [dr, dc] of [[0, 0], [0, 1], [1, 0], [1, 1]]) vals.push(t.data[(r + dr) * t.w + c + dc]);
+    if (vals.some((v) => v === null)) return NaN;
+    const dc = fc - c;
+    const dr = fr - r;
+    return (vals[0] * (1 - dc) + vals[1] * dc) * (1 - dr) + (vals[2] * (1 - dc) + vals[3] * dc) * dr;
+  };
+}
 
 async function openCopernicus(b) {
   const tiles = [];
@@ -498,9 +615,10 @@ function channelParams(tags) {
     width = Math.max(width, 40);
     depth = 4;
   } else if (/ร\.\s?1(?!\d)/.test(name)) {
-    // calibrated against the Nov 2025 X.44 hydrograph: any deeper and R.1 swallows the whole flood wave
+    // the 30 m DEM predates the 2017–21 enlargement (465 → 1,200 m³/s), so cut the channel to its
+    // design capacity; the head regulator (findRegulators) decides how much of the river it takes
     width = Math.max(width, 70);
-    depth = 2.5;
+    depth = Number(args['r1-depth'] ?? 7);
   } else if (/ร\.\s?[3-6]|Ror (See|Hok)/i.test(name)) {
     width = Math.max(width, 20);
     depth = 3.5;
@@ -512,6 +630,111 @@ function channelParams(tags) {
     depth = 3;
   }
   return { width, depth };
+}
+
+/**
+ * RID's flood-diversion split where Khlong R.1 (Khlong Phuminat Damri) leaves the U-Taphao: the R.1
+ * head regulator (design 1,200 m³/s after the 2017–21 enlargement, ~1,800 m³/s reached in Nov 2025)
+ * and the U-Taphao regulator that holds the city reach to ≈ 465 m³/s. Neither is mapped in OSM, so
+ * each sits 150 m into its channel from the split, as a cross-section the solver caps.
+ */
+function findRegulators(ways) {
+  const along = (pts, dist) => {
+    let acc = 0;
+    for (let k = 1; k < pts.length; k++) {
+      const [ax, ay] = pts[k - 1];
+      const [bx, by] = pts[k];
+      const l = Math.hypot(bx - ax, by - ay);
+      if (acc + l >= dist || k === pts.length - 1) {
+        const u = Math.min(1, (dist - acc) / (l || 1));
+        return { x: ax + (bx - ax) * u, y: ay + (by - ay) * u, tx: (bx - ax) / (l || 1), ty: (by - ay) / (l || 1) };
+      }
+      acc += l;
+    }
+    return null;
+  };
+  const key = ([x, y]) => `${Math.round(x)},${Math.round(y)}`;
+  const head = (re) => {
+    const named = ways.filter((w) => re.test(w.name));
+    return named.find((w) => !named.some((o) => o !== w && key(o.pts[o.pts.length - 1]) === key(w.pts[0])));
+  };
+  const r1 = head(/ร\.\s?1(?!\d)/);
+  if (!r1) return [];
+  // the city reach is the U-Taphao piece that starts at the split
+  const city = ways
+    .filter((w) => /อู่ตะเภา|อุ่ตะเภา/.test(w.name))
+    .map((w) => ({ w, d: Math.hypot(w.pts[0][0] - r1.pts[0][0], w.pts[0][1] - r1.pts[0][1]) }))
+    .filter((c) => c.d < 300)
+    .sort((a, b) => a.d - b.d)[0]?.w;
+  const out = [];
+  const add = (id, name, w, cap, design, release) => {
+    const p = along(w.pts, 150);
+    if (!p || !grid.contains(p.x, p.y, 200)) return;
+    const halfWidth = Math.max(w.width, 1.5 * CITY.cell) / 2;
+    out.push({ id, name, x: Math.round(p.x), y: Math.round(p.y), tx: Math.round(p.tx * 1000) / 1000, ty: Math.round(p.ty * 1000) / 1000, halfWidth, capM3s: cap, designM3s: design, ...(release ? { release } : {}) });
+  };
+  add('r1', 'ประตูระบายน้ำปากคลอง ร.1', r1, Number(args['r1-cap'] ?? 1800), 1200);
+  // RID ratings in Nov 2025: X.44 − X.174 = 15–37 % of X.90, i.e. the city got Khlong Wa plus about a
+  // quarter of the U-Taphao (R.1 took the rest), never more than the reach's ≈ 465 m³/s
+  if (city) add('utaphao', 'ประตูระบายน้ำคลองอู่ตะเภา (เข้าเมือง)', city, Number(args['city-cap'] ?? 465), 465, { fraction: Number(args['city-share'] ?? 0.25), of: ['utaphao'], plus: ['wa'] });
+  return out;
+}
+
+/**
+ * The DEM only sees the river's water surface, so below the split the U-Taphao bed is cut to the
+ * surveyed gauge datums — RID X.44 −2.20 m MSL, HII ONE037 −4.52 m near the mouth — interpolated
+ * along the river and held flat beyond them. Returns the number of channel cells lowered.
+ */
+function cutSurveyedBed(ways) {
+  const SURVEY = [
+    { lat: 7.00218, lon: 100.456062, bed: -2.2 },
+    { lat: 7.134997, lon: 100.45321, bed: -4.5 },
+  ];
+  const key = ([x, y]) => `${Math.round(x)},${Math.round(y)}`;
+  const r1 = ways.filter((w) => /ร\.\s?1(?!\d)/.test(w.name)).sort((a, b) => b.width - a.width)[0];
+  const utaphao = ways.filter((w) => /อู่ตะเภา|อุ่ตะเภา/.test(w.name));
+  let w = r1 && utaphao.find((u) => Math.hypot(u.pts[0][0] - r1.pts[0][0], u.pts[0][1] - r1.pts[0][1]) < 300);
+  const pts = [];
+  for (let hop = 0; w && hop < 40; hop++) {
+    pts.push(...(pts.length ? w.pts.slice(1) : w.pts));
+    const end = key(w.pts[w.pts.length - 1]);
+    w = utaphao.find((u) => key(u.pts[0]) === end);
+  }
+  if (pts.length < 2) return 0;
+  const line = R.densify(pts, CITY.cell / 2);
+  const dist = [0];
+  for (let k = 1; k < line.length; k++) dist.push(dist[k - 1] + Math.hypot(line[k][0] - line[k - 1][0], line[k][1] - line[k - 1][1]));
+  const marks = SURVEY.map((p) => {
+    const [x, y] = proj.toLocal(p.lat, p.lon);
+    let best = 0;
+    for (let k = 1; k < line.length; k++) if (Math.hypot(line[k][0] - x, line[k][1] - y) < Math.hypot(line[best][0] - x, line[best][1] - y)) best = k;
+    return { s: dist[best], bed: p.bed };
+  }).sort((a, b) => a.s - b.s);
+  const bedAt = (sv) => {
+    if (sv <= marks[0].s) return marks[0].bed;
+    for (let k = 1; k < marks.length; k++)
+      if (sv <= marks[k].s) return marks[k - 1].bed + ((marks[k].bed - marks[k - 1].bed) * (sv - marks[k - 1].s)) / (marks[k].s - marks[k - 1].s);
+    return marks[marks.length - 1].bed;
+  };
+  let lowered = 0;
+  for (let k = 0; k < line.length; k++) {
+    const [fi, fj] = grid.frac(line[k][0], line[k][1]);
+    const bed = bedAt(dist[k]);
+    for (let dj = -2; dj <= 2; dj++)
+      for (let di = -2; di <= 2; di++) {
+        const i = Math.round(fi) + di;
+        const j = Math.round(fj) + dj;
+        if (i < 0 || j < 0 || i >= nx || j >= ny) continue;
+        const id = j * nx + i;
+        if (!channelMask[id] || zCond[id] <= bed) continue;
+        // only the U-Taphao's own trough: cells next to the axis, not a crossing canal
+        const [cx, cy] = grid.center(i, j);
+        if (Math.hypot(cx - line[k][0], cy - line[k][1]) > 25) continue;
+        zCond[id] = bed;
+        lowered++;
+      }
+  }
+  return lowered;
 }
 
 function findInflows(ways) {
@@ -556,8 +779,7 @@ function findInflows(ways) {
 }
 
 function distToEdge([x, y]) {
-  const hw = (nx * CITY.cell) / 2;
-  return Math.min(hw - Math.abs(x), hw - Math.abs(y));
+  return Math.min(x - grid.x0, grid.x0 + nx * CITY.cell - x, y - grid.y0, grid.y0 + ny * CITY.cell - y);
 }
 
 function pickLandmarks(elements) {
@@ -703,32 +925,36 @@ function processBuildings(elements, downtown) {
   return out;
 }
 
-function encodeBuildings(list) {
+/** buildings.bin v2 ('HYB2'): int16 coordinates in 0.5 m units relative to `origin` (float32 in the header). */
+function encodeBuildings(list, origin) {
   const count = list.length;
   const totalVerts = list.reduce((s, b) => s + b.pts.length, 0);
   const pad4 = (n) => (n + 3) & ~3;
-  const offCounts = 12;
+  const offCounts = 20;
   const offHeights = offCounts + pad4(count * 2);
   const offTypes = offHeights + pad4(count * 2);
   const offCoords = offTypes + pad4(count);
   const buf = Buffer.alloc(offCoords + totalVerts * 4);
-  buf.write('HYB1', 0, 'ascii');
+  buf.write('HYB2', 0, 'ascii');
   buf.writeUInt32LE(count, 4);
   buf.writeUInt32LE(totalVerts, 8);
+  buf.writeFloatLE(origin.x, 12);
+  buf.writeFloatLE(origin.y, 16);
   let v = 0;
   list.forEach((b, i) => {
     buf.writeUInt16LE(b.pts.length, offCounts + i * 2);
     buf.writeUInt16LE(Math.round(b.h * 10), offHeights + i * 2);
     buf.writeUInt8(b.type, offTypes + i);
     for (const [x, y] of b.pts) {
-      buf.writeInt16LE(Math.round(x * 2), offCoords + v * 4);
-      buf.writeInt16LE(Math.round(y * 2), offCoords + v * 4 + 2);
+      buf.writeInt16LE(Math.round((x - origin.x) * 2), offCoords + v * 4);
+      buf.writeInt16LE(Math.round((y - origin.y) * 2), offCoords + v * 4 + 2);
       v++;
     }
   });
   return buf;
 }
 
+/** Mosaic of map tiles over `b`, resampled so its longer side is `size` px (keeps the metric aspect). */
 async function buildImagery(file, z, b, size) {
   const tx0 = Math.floor(lonToTileX(b.west, z));
   const tx1 = Math.floor(lonToTileX(b.east, z));
@@ -753,15 +979,18 @@ async function buildImagery(file, z, b, size) {
   const top = (latToTileY(b.north, z) - ty0) * 256;
   const w = (lonToTileX(b.east, z) - tx0) * 256 - left;
   const h = (latToTileY(b.south, z) - ty0) * 256 - top;
+  const [bx0, by0] = proj.toLocal(b.south, b.west);
+  const [bx1, by1] = proj.toLocal(b.north, b.east);
+  const aspect = (bx1 - bx0) / (by1 - by0);
+  const outW = aspect >= 1 ? size : Math.round(size * aspect);
+  const outH = aspect >= 1 ? Math.round(size / aspect) : size;
   await sharp(mosaic)
     .extract({ left: Math.round(left), top: Math.round(top), width: Math.round(w), height: Math.round(h) })
-    .resize(size, size, { fit: 'fill' })
+    .resize(outW, outH, { fit: 'fill' })
     .modulate({ saturation: 1.05 })
     .jpeg({ quality: 84, mozjpeg: true })
     .toFile(path.join(OUT, file));
-  const [x0, y0] = proj.toLocal(b.south, b.west);
-  const [x1, y1] = proj.toLocal(b.north, b.east);
-  return { file, zoom: z, x0, y0, x1, y1, size };
+  return { file, zoom: z, x0: bx0, y0: by0, x1: bx1, y1: by1, size, width: outW, height: outH };
 }
 
 // ─────────────────────────────────────────────────────────────── roads
@@ -816,26 +1045,29 @@ function pointAlong(pts, f) {
   return pts[pts.length - 1];
 }
 
-function encodeRoads(list) {
+/** roads.bin v2 ('HYR2'): int16 coordinates in 0.5 m units relative to `origin` (float32 in the header). */
+function encodeRoads(list, origin) {
   const count = list.length;
   const totalVerts = list.reduce((s, r) => s + r.pts.length, 0);
   const pad4 = (n) => (n + 3) & ~3;
-  const offCounts = 12;
+  const offCounts = 20;
   const offWidth = offCounts + pad4(count * 2);
   const offCls = offWidth + pad4(count * 2);
   const offCoords = offCls + pad4(count);
   const buf = Buffer.alloc(offCoords + totalVerts * 4);
-  buf.write('HYR1', 0, 'ascii');
+  buf.write('HYR2', 0, 'ascii');
   buf.writeUInt32LE(count, 4);
   buf.writeUInt32LE(totalVerts, 8);
+  buf.writeFloatLE(origin.x, 12);
+  buf.writeFloatLE(origin.y, 16);
   let v = 0;
   list.forEach((r, i) => {
     buf.writeUInt16LE(r.pts.length, offCounts + i * 2);
     buf.writeUInt16LE(Math.round(r.width * 10), offWidth + i * 2);
     buf.writeUInt8(r.cls | (r.bridge << 4) | (r.oneway << 5), offCls + i);
     for (const [x, y] of r.pts) {
-      buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(x * 2))), offCoords + v * 4);
-      buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(y * 2))), offCoords + v * 4 + 2);
+      buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round((x - origin.x) * 2))), offCoords + v * 4);
+      buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round((y - origin.y) * 2))), offCoords + v * 4 + 2);
       v++;
     }
   });

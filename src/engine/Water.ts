@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { CityData } from './cityData';
+import { gridCentre, gridOrigin, type CityData } from './cityData';
 import { ATMOSPHERE, DEPTH_RAMP_GLSL, NOISE } from './glsl';
 import { SHADOW_GLSL } from './Shadows';
 
@@ -29,8 +29,9 @@ export class Water {
     const { meta } = city;
     const { nx, ny, cell } = meta;
     const pos = new Float32Array(nx * ny * 3);
-    const x0 = -meta.width / 2 + cell / 2;
-    const y0 = -meta.height / 2 + cell / 2;
+    const g = gridOrigin(meta);
+    const x0 = g.x0 + cell / 2;
+    const y0 = g.y0 + cell / 2;
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
         const id = j * nx + i;
@@ -42,7 +43,8 @@ export class Water {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('uv', uv);
     geo.setIndex(index);
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, meta.elevation.p50, 0), Math.hypot(meta.width, meta.height));
+    const c = gridCentre(meta);
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(c.x, meta.elevation.p50, -c.y), Math.hypot(meta.width, meta.height));
 
     this.uniforms = {
       ...atmosphere,

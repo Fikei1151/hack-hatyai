@@ -80,6 +80,7 @@ function LayerMenu() {
         <Toggle label="ไฮไลต์อาคารที่ถูกน้ำท่วม" k="highlight" layers={layers} />
         <Toggle label="อาคาร 3 มิติ" k="buildings" layers={layers} />
         <Toggle label="ถนน" k="roads" layers={layers} />
+        <Toggle label="ต้นไม้" k="trees" layers={layers} />
         <Toggle label="เงาแดด" k="shadows" layers={layers} />
         <Toggle label="ภาพดาวเทียม" k="imagery" layers={layers} />
         <Toggle label="เม็ดฝน/ฟ้าแลบ" k="rain" layers={layers} />

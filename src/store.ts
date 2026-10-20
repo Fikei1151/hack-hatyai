@@ -135,6 +135,7 @@ export const useApp = create<AppState>((set, get) => ({
     buildings: true,
     imagery: true,
     roads: true,
+    trees: true,
     rain: true,
     shadows: true,
     labels: true,

@@ -4,7 +4,7 @@ import { HOUR, sampleForcing, totalHours } from '../sim/scenario';
 import type { LiveStats, Scenario, SeriesPoint } from '../sim/types';
 import { Atmosphere } from './Atmosphere';
 import { Buildings } from './Buildings';
-import { cellIndex, sampleGrid, type CityData, type Place, type PlaceCategory } from './cityData';
+import { cellIndex, gridCentre, sampleGrid, type CityData, type CityMeta, type Place, type PlaceCategory } from './cityData';
 import { FloodSolver } from './FloodSolver';
 import { Labels } from './Labels';
 import { Rain } from './Rain';
@@ -12,12 +12,15 @@ import { RainField } from './RainField';
 import { Roads } from './Roads';
 import { SHADOW_LAYER, SunShadow } from './Shadows';
 import { gridIndex, gridUv, Terrain } from './Terrain';
+import { Trees } from './Trees';
 import { Water, type WaterMode } from './Water';
 
 export interface Layers {
   buildings: boolean;
   imagery: boolean;
   roads: boolean;
+  /** trees planted from the satellite imagery */
+  trees: boolean;
   rain: boolean;
   shadows: boolean;
   /** landmark pins + river inflow markers */
@@ -62,11 +65,14 @@ export interface EngineCallbacks {
 const G = 9.81;
 
 /**
- * Water level at the north edge of the model. Beyond it lie ~10 km of lowland channel to Songkhla
- * Lake, so the edge stands above the lake by the backwater of that reach, which grows with the
- * flow it carries (a simple rating curve, tuned on the Nov 2025 X.44 hydrograph).
+ * Water level at the north edge of the model. City builds that reach Songkhla Lake (meta.outlet =
+ * 'lake') use the lake level itself. Older builds stop ~10 km short of the lake, so their edge
+ * stands above it by the backwater of that reach, which grows with the flow it carries (a simple
+ * rating curve, tuned on the Nov 2025 X.44 hydrograph).
  */
-export function outletStage(lakeLevelM: number, inflowM3s: number) {
+export function outletStage(lakeLevelM: number, inflowM3s: number, meta?: CityMeta) {
+  // domains that reach the lake take its level directly
+  if (meta?.outlet === 'lake') return lakeLevelM;
   return lakeLevelM + 1.6 * Math.pow(Math.max(0, inflowM3s) / 1000, 0.75);
 }
 
@@ -83,6 +89,9 @@ export class Engine {
   private water: Water;
   private buildings: Buildings;
   private roads: Roads;
+  private trees: Trees;
+  /** which shadow casters are shown; the cached sun shadow map is redrawn when this changes */
+  private casters = '';
   private rain = new Rain();
   private labels: Labels;
   private raf = 0;
@@ -164,9 +173,10 @@ export class Engine {
     this.water = new Water(city, index, uv, this.solver.staticTex, this.stateUniform, this.fluxUniform, atmo, shadowU);
     this.buildings = new Buildings(city, this.solver.staticTex, this.stateUniform, atmo, shadowU);
     this.roads = new Roads(city, atmo, shadowU);
+    this.trees = new Trees(city, this.solver.staticTex, this.stateUniform, atmo, shadowU);
     this.labels = new Labels(container, city, { onPoiClick: (id) => cb.onPoiClick(id), onPlaceClick: (id) => cb.onPlaceClick(id) });
 
-    this.scene.add(this.atmosphere.sky, this.terrain.mesh, this.terrain.skirt, this.roads.mesh, this.buildings.group, this.water.mesh, this.rain.mesh, this.labels.group);
+    this.scene.add(this.atmosphere.sky, this.terrain.mesh, this.terrain.skirt, this.roads.mesh, this.buildings.group, this.trees.group, this.water.mesh, this.rain.mesh, this.labels.group);
     (this.atmosphere.sky.material as THREE.Material).depthTest = false;
 
     const n = meta.nx * meta.ny;
@@ -327,7 +337,8 @@ export class Engine {
   }
 
   overview() {
-    this.flyTo(0, 1500, 13000);
+    const c = gridCentre(this.city.meta);
+    this.flyTo(c.x, c.y, Math.max(13000, 0.9 * Math.max(this.city.meta.width, this.city.meta.height)));
   }
 
   get isFinished() {
@@ -372,6 +383,7 @@ export class Engine {
     this.buildings.uniforms.uMode.value = L.impact === 'current' ? 1 : L.impact === 'max' ? 2 : 0;
     this.buildings.uniforms.uHighlight.value = L.highlight ? 1 : 0;
     this.roads.mesh.visible = L.roads;
+    this.trees.group.visible = L.trees;
     this.terrain.uniforms.uShowImagery.value = L.imagery ? 1 : 0;
     for (const f of meta.inflows) this.labels.setInflow(f.id, forcing.inflowM3s * f.share);
 
@@ -392,6 +404,13 @@ export class Engine {
       this.camera.updateProjectionMatrix();
     }
     if (this.camera.position.y < ground + 8) this.camera.position.y = ground + 8;
+
+    if (L.trees) this.trees.update(this.camera, this.clock, forcing.windDirDeg, forcing.windSpeedKmh);
+    const casters = `${L.buildings}${L.trees}`;
+    if (casters !== this.casters) {
+      this.casters = casters;
+      this.shadow.invalidate();
+    }
 
     // sun shadows around what the camera is looking at
     const camDist = this.camera.position.distanceTo(this.controls.target);
@@ -450,13 +469,19 @@ export class Engine {
     this.rainField.update(f, this.simTime, advanceBy);
     const sources = this.city.meta.inflows.map((inf) => ({ x: inf.x, y: inf.y, m3s: f.inflowM3s * inf.share, halfWidth: 4, channelOnly: true }));
     for (const sg of f.surges) sources.push({ x: sg.x, y: sg.y, m3s: sg.m3s, halfWidth: 1, channelOnly: false });
+    // regulators that follow an operating rule release a share of the river flow reaching them
+    for (const r of this.solver.regulators) {
+      if (!r.release) continue;
+      const q = (ids: string[]) => this.city.meta.inflows.reduce((sum, inf) => sum + (ids.includes(inf.id) ? f.inflowM3s * inf.share : 0), 0);
+      this.solver.setRegulatorCap(r.id, Math.min(r.capM3s, r.release.fraction * q(r.release.of) + q(r.release.plus ?? [])));
+    }
     // drained storm water re-enters the canal network
     this.solver.channelInject = this.solver.channelCells > 0 ? this.drainRateM3s / (this.solver.channelCells * this.city.meta.cell ** 2) : 0;
     this.solver.step(dt, steps, {
       rainMs: f.rainMmHr / 3.6e6,
       infilMs: f.infiltrationMmHr / 3.6e6,
       drainMs: (f.drainageMmHr * this.drainEff) / 3.6e6,
-      lakeStage: outletStage(f.lakeLevelM, f.inflowM3s),
+      lakeStage: outletStage(f.lakeLevelM, f.inflowM3s, this.city.meta),
       sources,
     });
     this.stateUniform.value = this.solver.stateTexture;
