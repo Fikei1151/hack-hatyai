@@ -131,9 +131,15 @@ export function scenarioFromEvent(e: EventRecord): Scenario {
     source: 'historical',
     seed: Number(e.id.replace(/\D/g, '')) || 2025,
     start_time: new Date(Date.parse(e.start)).toISOString(),
-    settings: { rain_bias: 1, initial_inflow_m3s: e.inflowM3s[0], initial_lake_m: e.lakeM[0], event_id: e.id },
+    settings: { rain_bias: 1, initial_inflow_m3s: e.inflowM3s[0], initial_lake_m: e.lakeM[0], event_id: e.id, preset_version: eventVersion(e) },
     phases: phasesFromHourly(e),
   };
+}
+
+/** fingerprint of an event's forcing, so stored copies are refreshed when events.json is rebuilt */
+function eventVersion(e: EventRecord) {
+  const sum = (a: number[]) => a.reduce((s, v) => s + (v ?? 0), 0);
+  return `${e.id}:${e.rainMmHr.length}:${Math.round(sum(e.rainMmHr) * 10)}:${Math.round(sum(e.inflowM3s))}:${Math.round(sum(e.lakeM) * 100)}`;
 }
 
 let eventsCache: Promise<EventRecord[]> | null = null;

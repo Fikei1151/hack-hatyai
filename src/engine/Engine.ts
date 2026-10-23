@@ -3,8 +3,9 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { HOUR, sampleForcing, totalHours } from '../sim/scenario';
 import type { LiveStats, Scenario, SeriesPoint } from '../sim/types';
 import { Atmosphere } from './Atmosphere';
+import { depressionDepth } from './basins';
 import { Buildings } from './Buildings';
-import { cellIndex, gridCentre, sampleGrid, type CityData, type CityMeta, type Place, type PlaceCategory } from './cityData';
+import { cellIndex, gridCentre, gridOrigin, sampleGrid, type CityData, type CityMeta, type Place, type PlaceCategory } from './cityData';
 import { FloodSolver } from './FloodSolver';
 import { Labels } from './Labels';
 import { Rain } from './Rain';
@@ -53,6 +54,16 @@ export interface PlaceImpact {
   firstWet: Float32Array;
 }
 
+/** End-of-day picture of the flood, kept so the user can flip back through the days. */
+export interface DaySummary {
+  /** local calendar date (Asia/Bangkok) the snapshot closes */
+  key: string;
+  t: number;
+  floodedKm2: number;
+  buildings: number;
+  maxDepth: number;
+}
+
 export interface EngineCallbacks {
   onStats: (s: LiveStats) => void;
   onSeriesPoint: (p: SeriesPoint) => void;
@@ -60,6 +71,19 @@ export interface EngineCallbacks {
   onPoiClick: (id: string) => void;
   onPlaceClick: (id: string) => void;
   onPlaceImpact: (impact: PlaceImpact) => void;
+  onDaySnapshot: (d: DaySummary) => void;
+  onFastForwardDone: () => void;
+}
+
+const MAX_DAYS = 16;
+
+/** Something drawn on top of the city (the board game's markers and routes) that hooks into the render loop. */
+export interface EngineLayer {
+  /** before the 3D scene is drawn */
+  beforeRender?(dt: number): void;
+  /** after the scene is drawn, camera matrices are fresh (project world points to the screen here) */
+  afterRender?(dt: number): void;
+  resize?(w: number, h: number): void;
 }
 
 const G = 9.81;
@@ -118,6 +142,8 @@ export class Engine {
   private channel: Uint8Array;
   private permanentWater: Uint8Array;
   private imperv: Float32Array;
+  /** water a cell holds in its natural basin (paddy, retention area) before it spills: not a flood */
+  private storage: Float32Array;
   private poiCells: { id: string; name: string; cells: number[] }[];
   private gaugeCells: { id: string; code: string; cells: number[] }[];
   private poiMax = new Map<string, number>();
@@ -130,6 +156,17 @@ export class Engine {
   simTime = 0;
   cumRainMm = 0;
   private finished = false;
+  private days: { key: string; depth: Float32Array }[] = [];
+  private currentDay: string | null = null;
+  private captureFinal = false;
+  private viewing: string | null = null;
+  private snapshotTex: THREE.DataTexture | null = null;
+  private zeroFlux: THREE.DataTexture | null = null;
+  private ffTarget: number | null = null;
+  /** simulated seconds per real second while running to a target (huge = as fast as the GPU goes) */
+  private ffSpeed = 1e7;
+  private layers: EngineLayer[] = [];
+  private statsQueued = false;
   /** resolves once the canal network has been spun up to a steady dry-weather state */
   readonly ready: Promise<void>;
   private isReady = false;
@@ -192,6 +229,7 @@ export class Engine {
       this.porosity[id] = this.permanentWater[id] ? 1 : Math.max(0.35, 1 - 0.65 * bf);
       this.imperv[id] = this.permanentWater[id] ? 0 : city.landcover[id * 4 + 3] / 255;
     }
+    this.storage = depressionDepth(city.terrain, meta.nx, meta.ny);
     this.poiCells = meta.pois.map((p) => ({ id: p.id, name: p.name, cells: this.landCells(p.x, p.y) }));
 
     // virtual RID gauges: water surface in the channel cells around the real station
@@ -290,6 +328,7 @@ export class Engine {
     if (!w || !h) return;
     this.renderer.setSize(w, h);
     this.labels.resize(w, h);
+    for (const l of this.layers) l.resize?.(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -314,7 +353,190 @@ export class Engine {
     this.solver.channelInject = 0;
     this.readPending = false;
     this.lastRead = 0;
+    this.days = [];
+    this.currentDay = null;
+    this.captureFinal = false;
+    this.ffTarget = null;
+    this.viewDay(null);
     this.requestStats(true);
+  }
+
+  private dayKey(t: number) {
+    const ms = Date.parse(this.getSettings().scenario.start_time) + t * 1000;
+    return new Date(ms + 7 * 3600_000).toISOString().slice(0, 10);
+  }
+
+  /** Show the water as it stood at the end of a recorded day (null = back to the live simulation). */
+  viewDay(key: string | null) {
+    if (!key) {
+      this.viewing = null;
+      this.stateUniform.value = this.solver.stateTexture;
+      this.fluxUniform.value = this.solver.fluxTexture;
+      return;
+    }
+    const d = this.days.find((x) => x.key === key);
+    if (!d) return;
+    const { nx, ny } = this.city.meta;
+    const make = () => {
+      const t = new THREE.DataTexture(new Float32Array(nx * ny * 4), nx, ny, THREE.RGBAFormat, THREE.FloatType);
+      t.minFilter = THREE.NearestFilter;
+      t.magFilter = THREE.NearestFilter;
+      t.needsUpdate = true;
+      return t;
+    };
+    this.snapshotTex ??= make();
+    this.zeroFlux ??= make();
+    const data = this.snapshotTex.image.data as Float32Array;
+    for (let i = 0; i < d.depth.length; i++) {
+      data[i * 4] = d.depth[i];
+      data[i * 4 + 1] = d.depth[i];
+      data[i * 4 + 2] = -1;
+      data[i * 4 + 3] = 0;
+    }
+    this.snapshotTex.needsUpdate = true;
+    this.viewing = key;
+    this.stateUniform.value = this.snapshotTex;
+    this.fluxUniform.value = this.zeroFlux;
+  }
+
+  /** Run as fast as the GPU allows to the next local midnight (or the scenario end), then stop. */
+  fastForwardToNextDay(): boolean {
+    const s = this.getSettings();
+    const total = totalHours(s.scenario) * HOUR;
+    if (this.finished || this.simTime >= total - 1) return false;
+    const startMs = Date.parse(s.scenario.start_time);
+    const local = startMs + this.simTime * 1000 + 7 * 3600_000;
+    let target = ((Math.floor(local / 86400_000) + 1) * 86400_000 - 7 * 3600_000 - startMs) / 1000;
+    if (target - this.simTime < 900) target += 86400;
+    this.ffTarget = Math.min(target, total);
+    this.ffSpeed = 1e7;
+    this.viewDay(null);
+    return true;
+  }
+
+  get fastForwarding() {
+    return this.ffTarget !== null;
+  }
+
+  /**
+   * Run the simulation to a simulated time, then stop and call onFastForwardDone. `speed` is simulated
+   * seconds per real second: leave it huge to go flat out, or pick ~3600 to watch the water rise.
+   */
+  runTo(target: number, speed = 1e7): boolean {
+    const total = totalHours(this.getSettings().scenario) * HOUR;
+    if (this.finished || target <= this.simTime + 1) return false;
+    this.ffTarget = Math.min(target, total);
+    this.ffSpeed = speed;
+    this.viewDay(null);
+    return true;
+  }
+
+  /** Time a burst of solver steps (ms per step) to see how fast this device runs the model; the sim restarts from t = 0. */
+  async benchmark(steps = 200): Promise<number> {
+    await this.ready;
+    const n = this.city.meta.nx * this.city.meta.ny;
+    const buf = new Float32Array(n * 4);
+    const forcing = { rainMs: 0, infilMs: 0, drainMs: 0, lakeStage: 0.8, sources: [] as { x: number; y: number; m3s: number; halfWidth: number; channelOnly: boolean }[] };
+    this.solver.step(1.0, 2, forcing); // warm up (shader compile) and wait for the GPU
+    await this.solver.readState(buf);
+    const r0 = performance.now();
+    await this.solver.readState(buf); // GPU idle: the cost of the read-back alone
+    const readMs = performance.now() - r0;
+    const t0 = performance.now();
+    this.solver.step(1.0, steps, forcing);
+    await this.solver.readState(buf);
+    const ms = Math.max(0.05, (performance.now() - t0 - readMs) / steps);
+    this.solver.reset();
+    this.stateUniform.value = this.solver.stateTexture;
+    this.fluxUniform.value = this.solver.fluxTexture;
+    return ms;
+  }
+
+  private tickRun(realDt: number, speed: number, total: number) {
+    if (this.ffTarget === null) return;
+    if (this.simTime < this.ffTarget - 1) this.advance(realDt, { ...this.getSettings(), speed }, total, this.ffTarget);
+    if (this.simTime >= this.ffTarget - 1 || this.finished) {
+      this.ffTarget = null;
+      this.requestStats(true);
+      this.cb.onFastForwardDone();
+    }
+  }
+
+  /**
+   * Advance a pending run-to-target by up to `simSeconds` without waiting for an animation frame
+   * (headless play-tests, hidden tabs). Returns true while the run is still pending.
+   */
+  pump(simSeconds = 2000): boolean {
+    if (!this.isReady || this.ffTarget === null || this.finished) return false;
+    this.maxStepsPerFrame = 400;
+    this.tickRun(0.1, simSeconds / 0.1, totalHours(this.getSettings().scenario) * HOUR);
+    return this.ffTarget !== null;
+  }
+
+  /** Change how fast a run to a target goes (e.g. skip the animation). */
+  setRunSpeed(speed: number) {
+    if (this.ffTarget !== null) this.ffSpeed = speed;
+  }
+
+  /** Water depth (m above the ground) in every cell right now. */
+  async readDepth(): Promise<Float32Array> {
+    const n = this.city.meta.nx * this.city.meta.ny;
+    const buf = await this.solver.readState(new Float32Array(n * 4));
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = buf[i * 4];
+    return out;
+  }
+
+  /** Cells that always hold water (canals, ponds, baseline-wet land) — never counted as flooded. */
+  get permanent(): Uint8Array {
+    return this.permanentWater;
+  }
+
+  addLayer(layer: EngineLayer) {
+    this.layers.push(layer);
+  }
+
+  removeLayer(layer: EngineLayer) {
+    this.layers = this.layers.filter((l) => l !== layer);
+  }
+
+  /** Local metres (x east, y north) of the ground under a screen point, or null if the ray misses the map. */
+  pickGround(clientX: number, clientY: number): { x: number; y: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -(((clientY - rect.top) / rect.height) * 2 - 1));
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const { origin, direction } = ray.ray;
+    const { meta, terrain } = this.city;
+    // march along the ray until it dips under the terrain, then refine by bisection
+    let prevT = 0;
+    let prevAbove = true;
+    for (let t = 0; t < 90000; t += Math.max(10, t * 0.01)) {
+      const x = origin.x + direction.x * t;
+      const y = -(origin.z + direction.z * t);
+      const h = origin.y + direction.y * t;
+      const g = sampleGrid(meta, terrain, x, y);
+      const above = h > g;
+      if (!above && prevAbove && t > 0) {
+        let lo = prevT;
+        let hi = t;
+        for (let i = 0; i < 18; i++) {
+          const mid = (lo + hi) / 2;
+          const mx = origin.x + direction.x * mid;
+          const my = -(origin.z + direction.z * mid);
+          if (origin.y + direction.y * mid > sampleGrid(meta, terrain, mx, my)) lo = mid;
+          else hi = mid;
+        }
+        const px = origin.x + direction.x * hi;
+        const py = -(origin.z + direction.z * hi);
+        const { x0, y0 } = gridOrigin(meta);
+        if (px < x0 || py < y0 || px > x0 + meta.width || py > y0 + meta.height) return null;
+        return { x: px, y: py };
+      }
+      prevT = t;
+      prevAbove = above;
+    }
+    return null;
   }
 
   flyTo(x: number, y: number, distance = 900) {
@@ -370,7 +592,11 @@ export class Engine {
     else if (realDt < 0.022) this.maxStepsPerFrame = Math.min(400, Math.ceil(this.maxStepsPerFrame * 1.06));
 
     const total = totalHours(s.scenario) * HOUR;
-    if (s.playing && !this.finished && this.isReady) this.advance(realDt, s, total);
+    if (this.ffTarget !== null && this.isReady && !this.finished) {
+      // run to a target: when going flat out, push the GPU hard (the UI drops to ~20 fps)
+      if (this.ffSpeed >= 1e6) this.maxStepsPerFrame = Math.max(this.maxStepsPerFrame, 220);
+      this.tickRun(realDt, this.ffSpeed, total);
+    } else if (s.playing && !this.finished && this.isReady && !this.viewing) this.advance(realDt, s, total);
     const forcing = sampleForcing(s.scenario, this.simTime);
 
     const date = new Date(Date.parse(s.scenario.start_time) + this.simTime * 1000);
@@ -417,8 +643,10 @@ export class Engine {
     const strength = L.shadows ? au.uDaylight.value * (1 - this.atmosphere.storm) ** 1.5 * 0.85 : 0;
     this.shadow.update(this.renderer, this.scene, au.uSunDir.value, this.controls.target, THREE.MathUtils.clamp(camDist * 0.95, 350, 3600), strength);
 
+    for (const l of this.layers) l.beforeRender?.(realDt);
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.scene, this.camera);
+    for (const l of this.layers) l.afterRender?.(realDt);
 
     const anyLabels = L.labels || L.places || L.canalNames || L.roadNames || L.keyPlaces;
     if (anyLabels) {
@@ -448,13 +676,16 @@ export class Engine {
     if (now - this.lastRead > 450) this.requestStats(false);
   };
 
-  private advance(realDt: number, s: EngineSettings, total: number) {
+  private advance(realDt: number, s: EngineSettings, total: number, limitT?: number) {
     let want = s.speed * realDt;
     if (this.simTime + want >= total) want = Math.max(0, total - this.simTime);
     if (want <= 0) {
       this.finish();
       return;
     }
+    // a fast-forward target only pauses the run; reaching it is not the end of the scenario
+    if (limitT !== undefined) want = Math.min(want, limitT - this.simTime);
+    if (want <= 0) return;
     // CFL for the local-inertial scheme; porosity speeds waves up (c = √(g·h/φ)), and depths can
     // grow between readbacks, so keep a margin
     const dtMax = THREE.MathUtils.clamp((0.6 * this.city.meta.cell) / (this.waveSpeed * 1.25), 0.05, 6);
@@ -496,12 +727,17 @@ export class Engine {
   private finish() {
     if (this.finished) return;
     this.finished = true;
+    this.captureFinal = true;
     this.requestStats(true);
     this.cb.onFinished();
   }
 
   private requestStats(forceSeries: boolean) {
-    if (this.readPending) return;
+    if (this.readPending) {
+      // a forced read (end of run, end of a fast-forward, reset) must not be lost behind a routine one
+      if (forceSeries) this.statsQueued = true;
+      return;
+    }
     this.readPending = true;
     this.lastRead = performance.now();
     const t = this.simTime;
@@ -510,7 +746,13 @@ export class Engine {
       .readState(this.readBuf)
       .then((buf) => this.computeStats(buf, t, f.rainMmHr, f.inflowM3s, f.phaseIndex, f.drainageMmHr, forceSeries))
       .catch(() => undefined)
-      .finally(() => (this.readPending = false));
+      .finally(() => {
+        this.readPending = false;
+        if (this.statsQueued) {
+          this.statsQueued = false;
+          this.requestStats(true);
+        }
+      });
   }
 
   private computeStats(buf: Float32Array, t: number, rain: number, inflow: number, phaseIndex: number, drainMmHr: number, forceSeries: boolean) {
@@ -541,12 +783,14 @@ export class Engine {
       }
       if (this.permanentWater[id]) continue;
       if (h > 0.003) drainCells += this.imperv[id];
-      if (h <= 0.1) continue;
+      // a basin that is dry in dry weather fills up in rain; only water over its rim is a flood
+      const over = h - this.storage[id];
+      if (over <= 0.1) continue;
       flooded++;
-      if (h > 0.5) deep++;
-      if (h > 1.5) severe++;
-      if (h > maxD && this.imperv[id] > 0.15) maxD = h; // deepest water where people live
-      vol += h * this.porosity[id] * a;
+      if (over > 0.5) deep++;
+      if (over > 1.5) severe++;
+      if (over > maxD && this.imperv[id] > 0.15) maxD = over; // deepest water where people live
+      vol += over * this.porosity[id] * a;
     }
     this.waveSpeed = Math.sqrt(c2);
     // storm drains outfall into the canals: once those run near bank-full the drains back up
@@ -559,7 +803,7 @@ export class Engine {
     const cc = this.buildings.centroidCell;
     for (let b = 0; b < cc.length; b++) {
       if (this.permanentWater[cc[b]]) continue; // stilt houses over canals/ponds are always "wet"
-      const h = buf[cc[b] * 4];
+      const h = buf[cc[b] * 4] - this.storage[cc[b]];
       if (h > 0.3) affected++;
       if (h > 1.5) bSevere++;
     }
@@ -611,6 +855,19 @@ export class Engine {
       canalFill: this.canalFill,
     };
     this.cb.onStats(stats);
+
+    // end-of-day snapshots for the day-by-day viewer
+    const key = this.dayKey(t);
+    if (this.currentDay === null) this.currentDay = key;
+    if (key !== this.currentDay || this.captureFinal) {
+      const closing = key !== this.currentDay ? this.currentDay : key;
+      const depth = new Float32Array(meta.nx * meta.ny);
+      for (let i = 0; i < depth.length; i++) depth[i] = buf[i * 4];
+      this.days = [...this.days.filter((d) => d.key !== closing), { key: closing, depth }].slice(-MAX_DAYS);
+      this.cb.onDaySnapshot({ key: closing, t, floodedKm2: stats.floodedKm2, buildings: affected, maxDepth: maxD });
+      this.currentDay = key;
+      if (this.captureFinal && key === closing) this.captureFinal = false;
+    }
     if (forceSeries || t - this.lastSeriesT >= 600) {
       this.lastSeriesT = t;
       this.cb.onSeriesPoint({

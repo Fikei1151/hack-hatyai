@@ -1,20 +1,24 @@
 import { useMemo, useState } from 'react';
 import type { PlaceCategory } from '../engine/cityData';
-import { PLACE_ICON } from '../engine/Labels';
+import { KIND_ICON, PLACE_ICON } from '../engine/Labels';
 import { ALL_CATEGORIES, getEngine, useApp } from '../store';
-import { depthLevel, LEVEL_COLOR, LEVEL_TEXT, num } from './format';
+import { bodyLevel, depthLevel, LEVEL_INK, LEVEL_TEXT, num } from './format';
 import { StatusIcon } from './StatsPanel';
 
 export const CATEGORY_TH: Record<PlaceCategory, string> = {
   health: 'โรงพยาบาล/สุขภาพ',
   emergency: 'ตำรวจ/ดับเพลิง',
-  shelter: 'ศูนย์พักพิง/จุดรวมพล',
+  shelter: 'ศูนย์พักพิง',
+  community: 'ชุมชน/หมู่บ้าน',
   education: 'สถานศึกษา',
   religion: 'ศาสนสถาน',
   market: 'ตลาด/ห้าง',
+  shop: 'ร้านสะดวกซื้อ',
   government: 'หน่วยงานรัฐ',
   transport: 'คมนาคม',
-  landmark: 'สวน/แหล่งสำคัญ',
+  fuel: 'ปั๊มน้ำมัน',
+  finance: 'ธนาคาร',
+  landmark: 'สวน/ที่เที่ยว',
   lodging: 'โรงแรม/ที่พัก',
 };
 
@@ -22,7 +26,22 @@ const KIND_TH: Record<string, string> = {
   hospital: 'โรงพยาบาล',
   clinic: 'คลินิก',
   care_home: 'สถานดูแล',
+  pharmacy: 'ร้านยา',
+  dentist: 'คลินิกทันตกรรม',
   university: 'มหาวิทยาลัย/วิทยาลัย',
+  faculty: 'อาคารในมหาวิทยาลัย',
+  convenience: 'ร้านสะดวกซื้อ',
+  bank: 'ธนาคาร',
+  fuel: 'ปั๊มน้ำมัน',
+  rail_halt: 'ที่หยุดรถไฟ',
+  guest_house: 'เกสต์เฮาส์',
+  viewpoint: 'จุดชมวิว',
+  public: 'อาคารสาธารณะ',
+  village: 'หมู่บ้าน',
+  hamlet: 'หมู่บ้าน',
+  suburb: 'ย่าน/ชุมชน',
+  neighbourhood: 'ชุมชน',
+  quarter: 'ย่าน',
   school: 'โรงเรียน',
   kindergarten: 'โรงเรียนอนุบาล',
   temple: 'วัด',
@@ -50,17 +69,22 @@ const KIND_TH: Record<string, string> = {
   sports_centre: 'ศูนย์กีฬา',
 };
 
+/** soft badge backgrounds behind each category's emoji (identity comes from the emoji + label) */
 export const CATEGORY_COLOR: Record<PlaceCategory, string> = {
-  health: '#d03b3b',
-  emergency: '#eb6834',
-  shelter: '#0ca30c',
-  education: '#2a78d6',
-  religion: '#c98500',
-  market: '#d55181',
-  government: '#6250d6',
-  transport: '#199e70',
-  landmark: '#6b7280',
-  lodging: '#8b6f47',
+  health: '#ffe1e1',
+  emergency: '#ffe6d6',
+  shelter: '#dff5df',
+  community: '#fdebd3',
+  education: '#dcebfd',
+  religion: '#fff0c9',
+  market: '#fde0ec',
+  shop: '#f2e8fb',
+  government: '#e5e1fb',
+  transport: '#d7f3ea',
+  fuel: '#ececec',
+  finance: '#e0f2f4',
+  landmark: '#e3f4d8',
+  lodging: '#f3e9dc',
 };
 
 export function PlacesPanel() {
@@ -111,22 +135,23 @@ export function PlacesPanel() {
     <div className="flex flex-col gap-2.5">
       <div className="flex items-baseline justify-between gap-2">
         <div>
-          <div className="text-[13px] font-semibold">สถานที่สำคัญ {num(places.length)} แห่ง</div>
+          <div className="font-cute text-[15px] font-bold">📍 สถานที่สำคัญ {num(places.length)} แห่ง</div>
           <div className="text-[11px] text-ink-3">{source === 'supabase' ? 'จากตาราง places บน Supabase (OpenStreetMap)' : 'จาก OpenStreetMap (ไฟล์ในเครื่อง)'}</div>
         </div>
         <label className="flex items-center gap-1.5 text-[11.5px] text-ink-2">
-          <input type="checkbox" className="h-4 w-4 accent-[#3987e5]" checked={showOnMap} onChange={(e) => a.setLayer('keyPlaces', e.target.checked)} />
+          <input type="checkbox" className="h-4 w-4 accent-[#2a78d6]" checked={showOnMap} onChange={(e) => a.setLayer('keyPlaces', e.target.checked)} />
           แสดงบนแผนที่
         </label>
       </div>
 
-      <div className={`rounded-xl border px-2.5 py-2 text-[12px] ${wetTotal ? 'border-serious/50 bg-serious/10' : 'border-line bg-white/[0.03]'}`}>
+      <div className={`rounded-2xl border px-3 py-2 text-[12.5px] ${wetTotal ? 'border-[#f8c9b4] bg-[#fff4ee]' : 'border-line bg-card'}`}>
         {wetTotal ? (
           <span>
-            ขณะนี้ <b className="text-[14px]">{num(wetTotal)}</b> แห่งมีน้ำท่วมขัง ≥10 ซม. — ในจำนวนนี้ลึกเกิน 50 ซม. <b>{num(rows.filter((r) => r.depth >= 0.5).length)}</b> แห่ง
+            😟 ตอนนี้ <b className="font-cute text-[16px]">{num(wetTotal)}</b> แห่งมีน้ำท่วมขัง (เกิน 10 ซม.) — ลึกเกินหัวเข่า{' '}
+            <b>{num(rows.filter((r) => r.depth >= 0.5).length)}</b> แห่ง
           </span>
         ) : (
-          <span className="text-ink-2">ยังไม่มีสถานที่สำคัญถูกน้ำท่วม — กด ▶ เพื่อเริ่มจำลอง</span>
+          <span className="text-ink-2">😊 ยังไม่มีสถานที่สำคัญถูกน้ำท่วม — กด ▶ หรือไปที่ 🌧️ ทดลองฝน</span>
         )}
       </div>
 
@@ -141,14 +166,14 @@ export function PlacesPanel() {
               type="button"
               onClick={() => a.toggleCategory(c)}
               aria-pressed={on}
-              className={`flex items-center gap-1.5 rounded-lg border px-1.5 py-1 text-left text-[11.5px] ${on ? 'border-line bg-white/[0.06]' : 'border-transparent opacity-45'}`}
+              className={`flex items-center gap-1.5 rounded-xl border px-1.5 py-1 text-left text-[11.5px] transition-opacity ${on ? 'border-line bg-white' : 'border-transparent bg-transparent opacity-50'}`}
             >
-              <span className="grid h-[18px] w-[18px] flex-none place-items-center rounded-full text-[10px] font-bold text-white" style={{ background: CATEGORY_COLOR[c] }}>
+              <span className="grid h-[22px] w-[22px] flex-none place-items-center rounded-full text-[12px]" style={{ background: CATEGORY_COLOR[c] }} aria-hidden="true">
                 {PLACE_ICON[c]}
               </span>
               <span className="min-w-0 flex-1 truncate">{CATEGORY_TH[c]}</span>
               <span className="tabular flex-none text-ink-3">
-                {e.wet ? <b className="text-serious">{e.wet}</b> : 0}/{e.total}
+                {e.wet ? <b style={{ color: 'var(--color-serious-ink)' }}>{e.wet}</b> : 0}/{e.total}
               </span>
             </button>
           );
@@ -156,42 +181,47 @@ export function PlacesPanel() {
       </div>
 
       <div className="flex gap-1.5">
-        <input className="field" placeholder="ค้นหาชื่อสถานที่…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="ค้นหาสถานที่" />
-        <select className="field w-[118px]" value={sort} onChange={(e) => setSort(e.target.value as 'depth' | 'importance')} aria-label="เรียงลำดับ">
+        <input className="field" placeholder="🔎 ค้นหาชื่อสถานที่…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="ค้นหาสถานที่" />
+        <select className="field w-[122px]" value={sort} onChange={(e) => setSort(e.target.value as 'depth' | 'importance')} aria-label="เรียงลำดับ">
           <option value="depth">น้ำลึกสุดก่อน</option>
           <option value="importance">ความสำคัญ</option>
         </select>
       </div>
 
       <ul className="flex flex-col">
-        {list.slice(0, 160).map((r) => {
+        {list.slice(0, 200).map((r) => {
           const lv = depthLevel(r.depth);
+          const body = bodyLevel(r.depth);
           return (
             <li key={r.p.id}>
-              <button type="button" className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left hover:bg-white/5" onClick={() => getEngine()?.flyToPlace(r.p.id)}>
-                <span className="grid h-[22px] w-[22px] flex-none place-items-center rounded-full text-[11px] font-bold text-white" style={{ background: CATEGORY_COLOR[r.p.category] }} aria-hidden="true">
-                  {PLACE_ICON[r.p.category]}
+              <button type="button" className="flex w-full items-center gap-2 rounded-xl px-1.5 py-1.5 text-left hover:bg-hover" onClick={() => getEngine()?.flyToPlace(r.p.id)}>
+                <span className="grid h-[26px] w-[26px] flex-none place-items-center rounded-full text-[14px]" style={{ background: CATEGORY_COLOR[r.p.category] }} aria-hidden="true">
+                  {KIND_ICON[r.p.kind] ?? PLACE_ICON[r.p.category]}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12.5px]">{r.p.name}</span>
+                  <span className="block truncate text-[12.5px] font-medium">{r.p.name}</span>
                   <span className="block truncate text-[10.5px] text-ink-3">
                     {KIND_TH[r.p.kind] ?? r.p.kind}
-                    {r.firstWet >= 0 ? ` · น้ำถึงชั่วโมงที่ ${num(r.firstWet, 1)}` : ''}
+                    {r.firstWet >= 0 ? ` · น้ำมาถึงชั่วโมงที่ ${num(r.firstWet, 1)}` : ''}
                   </span>
                 </span>
                 <span className="flex flex-none flex-col items-end text-[11px]">
-                  <span className="inline-flex items-center gap-1 font-medium" style={{ color: LEVEL_COLOR[lv] }}>
+                  <span className="inline-flex items-center gap-1 font-semibold" style={{ color: LEVEL_INK[lv] }}>
                     <StatusIcon level={lv} />
-                    {r.depth >= 0.05 ? `${num(r.depth, 2)} ม.` : LEVEL_TEXT[lv]}
+                    {r.depth >= 0.05 ? `${num(r.depth, 2)} ม. ${body.emoji}` : LEVEL_TEXT[lv]}
                   </span>
-                  {r.max >= 0.1 && <span className="tabular text-[10.5px] text-ink-3">สูงสุด {num(r.max, 1)} ม.</span>}
+                  {r.depth >= 0.05 ? (
+                    <span className="text-[10.5px] text-ink-3">ระดับ{body.text}</span>
+                  ) : r.max >= 0.1 ? (
+                    <span className="tabular text-[10.5px] text-ink-3">เคยสูงสุด {num(r.max, 1)} ม.</span>
+                  ) : null}
                 </span>
               </button>
             </li>
           );
         })}
       </ul>
-      {list.length > 160 && <div className="text-center text-[11px] text-ink-3">แสดง 160 จาก {list.length} — ใช้ช่องค้นหาเพื่อกรอง</div>}
+      {list.length > 200 && <div className="text-center text-[11px] text-ink-3">แสดง 200 จาก {list.length} — ใช้ช่องค้นหาเพื่อกรอง</div>}
     </div>
   );
 }

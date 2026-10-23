@@ -155,17 +155,20 @@ const roadJson = await overpass(
 );
 step('OpenStreetMap: important places…');
 const placeJson = await overpass(
-  `[out:json][timeout:240];(
-    nwr["amenity"~"^(hospital|clinic|doctors|school|university|college|kindergarten|place_of_worship|marketplace|police|fire_station|townhall|community_centre|bus_station|library|social_facility|nursing_home|shelter|courthouse|post_office)$"](${bbox});
-    nwr["shop"~"^(mall|supermarket|department_store)$"](${bbox});
-    nwr["railway"="station"](${bbox});
+  `[out:json][timeout:300];(
+    nwr["amenity"~"^(hospital|clinic|doctors|dentist|pharmacy|school|university|college|kindergarten|childcare|place_of_worship|marketplace|police|fire_station|townhall|community_centre|bus_station|library|social_facility|nursing_home|shelter|courthouse|post_office|bank|fuel)$"](${bbox});
+    nwr["healthcare"]["name"](${bbox});
+    nwr["shop"~"^(mall|supermarket|department_store|convenience)$"](${bbox});
+    nwr["railway"~"^(station|halt)$"](${bbox});
     nwr["aeroway"="aerodrome"](${bbox});
-    nwr["tourism"~"^(hotel|museum|attraction)$"](${bbox});
+    nwr["tourism"~"^(hotel|guest_house|hostel|museum|attraction|viewpoint)$"](${bbox});
     nwr["leisure"~"^(park|stadium|sports_centre)$"]["name"](${bbox});
     nwr["office"="government"](${bbox});
     nwr["emergency"="assembly_point"](${bbox});
+    nwr["building"~"^(hospital|school|university|college|temple|mosque|church|government|public)$"]["name"](${bbox});
+    node["place"~"^(suburb|neighbourhood|quarter|village|hamlet)$"]["name"](${bbox});
   );out center tags;`,
-  osmCache('osm_places'),
+  osmCache('osm_places_v2'),
   { refresh, log },
 );
 
@@ -1078,32 +1081,44 @@ function encodeRoads(list, origin) {
 
 function placeCategory(t) {
   const a = t.amenity;
-  if (a === 'hospital') return ['health', 'hospital', 10];
-  if (a === 'clinic' || a === 'doctors') return ['health', 'clinic', 5];
+  const b = t.building;
+  const hc = t.healthcare;
+  if (a === 'hospital' || hc === 'hospital' || b === 'hospital') return ['health', 'hospital', 10];
+  if (a === 'clinic' || a === 'doctors' || hc === 'clinic' || hc === 'doctor' || hc === 'centre') return ['health', 'clinic', 5];
+  if (a === 'dentist' || hc === 'dentist') return ['health', 'dentist', 3];
+  if (a === 'pharmacy' || hc === 'pharmacy') return ['health', 'pharmacy', 3];
+  if (a === 'social_facility' || a === 'nursing_home') return ['health', 'care_home', 6];
   if (a === 'university' || a === 'college') return ['education', 'university', 8];
-  if (a === 'school') return ['education', 'school', 6];
-  if (a === 'kindergarten') return ['education', 'kindergarten', 4];
-  if (a === 'place_of_worship') {
-    const r = t.religion;
+  // campus buildings (faculties, halls) mapped only as building=university
+  if (b === 'university' || b === 'college') return ['education', 'faculty', 3];
+  if (a === 'school' || b === 'school') return ['education', 'school', a === 'school' ? 6 : 5];
+  if (a === 'kindergarten' || a === 'childcare') return ['education', 'kindergarten', 4];
+  if (a === 'place_of_worship' || /^(temple|mosque|church)$/.test(b ?? '')) {
+    const r = t.religion ?? (b === 'mosque' ? 'muslim' : b === 'church' ? 'christian' : b === 'temple' ? 'buddhist' : '');
     return ['religion', r === 'muslim' ? 'mosque' : r === 'christian' ? 'church' : r === 'buddhist' ? 'temple' : 'shrine', 5];
   }
   if (a === 'marketplace') return ['market', 'market', 7];
   if (['mall', 'department_store'].includes(t.shop)) return ['market', 'mall', 7];
-  // only the big-box stores people actually navigate by (convenience chains are not landmarks)
-  if (t.shop === 'supermarket') return /big ?c|บิ๊กซี|lotus|โลตัส|makro|แม็คโคร|tops|ท็อปส์|villa|วิลล่า/i.test(`${t.name ?? ''} ${t.brand ?? ''}`) ? ['market', 'supermarket', 5] : null;
+  if (t.shop === 'supermarket') return ['market', 'supermarket', /big ?c|บิ๊กซี|lotus|โลตัส|makro|แม็คโคร|tops|ท็อปส์|villa|วิลล่า/i.test(`${t.name ?? ''} ${t.brand ?? ''}`) ? 5 : 3];
+  if (t.shop === 'convenience') return ['shop', 'convenience', 2];
   if (a === 'police') return ['emergency', 'police', 8];
   if (a === 'fire_station') return ['emergency', 'fire_station', 9];
   // amenity=shelter is mostly bus-stop roofs and gazebos; keep real evacuation points only
   if (t.emergency === 'assembly_point' || t.social_facility === 'shelter' || (a === 'shelter' && /พักพิง|อพยพ|evacuat|relief/i.test(t.name ?? ''))) return ['shelter', 'shelter', 8];
-  if (a === 'social_facility' || a === 'nursing_home') return ['health', 'care_home', 6];
-  if (a === 'townhall' || a === 'courthouse' || t.office === 'government') return ['government', 'government', 7];
-  if (a === 'community_centre' || a === 'library' || a === 'post_office') return ['government', a, 4];
+  if (a === 'townhall' || a === 'courthouse' || t.office === 'government' || b === 'government') return ['government', 'government', 7];
+  if (a === 'community_centre' || a === 'library' || a === 'post_office' || b === 'public') return ['government', a ?? 'public', 4];
+  if (a === 'bank') return ['finance', 'bank', 3];
+  if (a === 'fuel') return ['fuel', 'fuel', 3];
   if (t.railway === 'station') return ['transport', 'rail_station', 8];
+  if (t.railway === 'halt') return ['transport', 'rail_halt', 5];
   if (a === 'bus_station') return ['transport', 'bus_station', 7];
   if (t.aeroway === 'aerodrome') return ['transport', 'airport', 9];
   if (t.tourism === 'hotel') return ['lodging', 'hotel', 3];
-  if (t.tourism === 'museum' || t.tourism === 'attraction') return ['landmark', t.tourism, 5];
+  if (t.tourism === 'guest_house' || t.tourism === 'hostel') return ['lodging', 'guest_house', 2];
+  if (t.tourism === 'museum' || t.tourism === 'attraction' || t.tourism === 'viewpoint') return ['landmark', t.tourism, 5];
   if (t.leisure) return ['landmark', t.leisure, 4];
+  // villages and neighbourhoods (ชุมชน/หมู่บ้าน): where people live, flood status at their centre
+  if (t.place) return ['community', t.place, t.place === 'suburb' || t.place === 'quarter' ? 6 : 4];
   return null;
 }
 
@@ -1115,7 +1130,7 @@ function processPlaces(elements) {
     const cat = placeCategory(t);
     if (!cat) continue;
     const name = t['name:th'] ?? t.name ?? t['name:en'];
-    if (!name || /^(7-?eleven|เซเว่น|family ?mart|แฟมิลี่มาร์ท|lawson|ลอว์สัน)/i.test(name)) continue;
+    if (!name) continue;
     const c = el.center ?? { lat: el.lat, lon: el.lon };
     if (c.lat === undefined) continue;
     const [x, y] = proj.toLocal(c.lat, c.lon);
@@ -1136,7 +1151,7 @@ function processPlaces(elements) {
       x: Math.round(x * 10) / 10,
       y: Math.round(y * 10) / 10,
       ground_m: Math.round(ground * 100) / 100,
-      tags: Object.fromEntries(Object.entries(t).filter(([k]) => /^(amenity|shop|religion|operator|healthcare|beds|isced:level|addr:street|phone|website|tourism|railway|leisure|office|emergency)$/.test(k))),
+      tags: Object.fromEntries(Object.entries(t).filter(([k]) => /^(amenity|shop|religion|operator|brand|healthcare|beds|isced:level|addr:street|phone|website|tourism|railway|leisure|office|emergency|place|building)$/.test(k))),
     });
   }
   return out.sort((a, b) => b.importance - a.importance || a.name.localeCompare(b.name, 'th'));

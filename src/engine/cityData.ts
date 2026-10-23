@@ -101,7 +101,21 @@ export interface RoadLabel {
   y: number;
 }
 
-export type PlaceCategory = 'health' | 'education' | 'religion' | 'market' | 'emergency' | 'government' | 'transport' | 'lodging' | 'landmark' | 'shelter';
+export type PlaceCategory =
+  | 'health'
+  | 'education'
+  | 'religion'
+  | 'market'
+  | 'shop'
+  | 'emergency'
+  | 'government'
+  | 'transport'
+  | 'lodging'
+  | 'landmark'
+  | 'shelter'
+  | 'finance'
+  | 'fuel'
+  | 'community';
 
 export interface Place {
   id: string;
@@ -220,7 +234,7 @@ function decodeCoords(buf: ArrayBuffer, off: number, totalVerts: number, cx: num
   return coords;
 }
 
-function decodeBuildings(buf: ArrayBuffer): BuildingSet {
+export function decodeBuildings(buf: ArrayBuffer): BuildingSet {
   const { count, totalVerts, cx, cy, start } = polyHeader(new DataView(buf), 'HYB', 'buildings.bin');
   const pad4 = (n: number) => (n + 3) & ~3;
   const offCounts = start;
@@ -275,7 +289,7 @@ function decodeTrees(buf: ArrayBuffer): TreeSet {
   return { count, x, y, height, radius, color: new Uint8Array(buf, offC, count * 3) };
 }
 
-function decodeRoads(buf: ArrayBuffer): RoadSet {
+export function decodeRoads(buf: ArrayBuffer): RoadSet {
   const { count, totalVerts, cx, cy, start } = polyHeader(new DataView(buf), 'HYR', 'roads.bin');
   const pad4 = (n: number) => (n + 3) & ~3;
   const offCounts = start;

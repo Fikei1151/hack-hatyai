@@ -20,6 +20,8 @@ export interface ScenarioSummary {
   source: Scenario['source'];
   updated_at: string;
   phases: number;
+  /** settings.preset_version of a stored built-in scenario */
+  version: string | null;
 }
 
 export interface RunRecord {
@@ -98,7 +100,7 @@ function lsWrite<T>(k: string, v: T[]) {
 
 export async function listScenarios(): Promise<ScenarioSummary[]> {
   if (mode === 'supabase' && client) {
-    const { data, error } = await client.from('scenarios').select('id, slug, name, source, updated_at, phases(count)').order('updated_at', { ascending: false });
+    const { data, error } = await client.from('scenarios').select('id, slug, name, source, updated_at, version:settings->>preset_version, phases(count)').order('updated_at', { ascending: false });
     if (error) throw error;
     return (data ?? []).map((r) => ({
       id: r.id,
@@ -107,6 +109,7 @@ export async function listScenarios(): Promise<ScenarioSummary[]> {
       source: r.source,
       updated_at: r.updated_at,
       phases: (r.phases as unknown as { count: number }[])?.[0]?.count ?? 0,
+      version: (r.version as string | null) ?? null,
     }));
   }
   return lsRead<Scenario & { id: string; updated_at: string }>(LS_SCEN).map((s) => ({
@@ -116,6 +119,7 @@ export async function listScenarios(): Promise<ScenarioSummary[]> {
     source: s.source,
     updated_at: s.updated_at,
     phases: s.phases.length,
+    version: s.settings?.preset_version ?? null,
   }));
 }
 
@@ -174,10 +178,19 @@ export async function deleteScenario(id: string) {
   );
 }
 
-/** Insert built-in scenarios that are not stored yet (matched by slug); never overwrites edits. */
+/**
+ * Store built-in scenarios (matched by slug): insert missing ones and refresh stored copies whose
+ * built-in data changed (`settings.preset_version`). Edits to a built-in are saved as a separate
+ * custom copy, so a refresh never loses user work.
+ */
 export async function syncPresets(presets: Scenario[]) {
-  const existing = new Set((await listScenarios()).map((s) => s.slug).filter(Boolean));
-  for (const p of presets) if (p.slug && !existing.has(p.slug)) await saveScenario(p);
+  const existing = new Map((await listScenarios()).filter((s) => s.slug).map((s) => [s.slug, s]));
+  for (const p of presets) {
+    if (!p.slug) continue;
+    const cur = existing.get(p.slug);
+    if (!cur) await saveScenario(p);
+    else if (p.settings.preset_version && cur.version !== p.settings.preset_version) await saveScenario({ ...p, id: cur.id });
+  }
 }
 
 // ───────────────────────────────────────────── runs
@@ -292,4 +305,46 @@ export async function cached<T>(cacheKey: string, maxAgeHours: number, fetcher: 
     return fresh;
   }
   return fetcher();
+}
+
+// ───────────────────────────────────────────── board-game results
+
+export interface GameResult {
+  id: string;
+  created_at: string;
+  seed: number;
+  difficulty: 'easy' | 'normal' | 'hard';
+  rounds: number;
+  teams: { name: string; role: string; rescued: number }[];
+  district: string;
+  people_total: number;
+  people_saved: number;
+  points: number;
+  stars: number;
+  summary: Record<string, unknown>;
+}
+
+export type NewGameResult = Omit<GameResult, 'id' | 'created_at'>;
+
+const LS_GAMES = 'hatyai.games.v1';
+
+export async function saveGameResult(r: NewGameResult): Promise<void> {
+  if (mode === 'supabase' && client) {
+    const { error } = await client.from('game_results').insert(r);
+    if (error) throw error;
+    return;
+  }
+  lsWrite(LS_GAMES, [{ ...r, id: newId(), created_at: new Date().toISOString() }, ...lsRead<GameResult>(LS_GAMES)].slice(0, 50));
+}
+
+/** Best games first. */
+export async function listGameResults(limit = 8): Promise<GameResult[]> {
+  if (mode === 'supabase' && client) {
+    const { data, error } = await client.from('game_results').select('*').order('points', { ascending: false }).limit(limit);
+    if (error) throw error;
+    return (data ?? []) as GameResult[];
+  }
+  return lsRead<GameResult>(LS_GAMES)
+    .sort((a, b) => b.points - a.points)
+    .slice(0, limit);
 }

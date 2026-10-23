@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { bodyLevel } from '../ui/format';
 import { gridOrigin, sampleGrid, type CityData, type Place, type PlaceCategory } from './cityData';
 
 export interface LabelHandlers {
@@ -17,19 +18,43 @@ export interface LabelVisibility {
 }
 
 export const PLACE_ICON: Record<PlaceCategory, string> = {
-  health: '✚',
-  education: '✎',
-  religion: '☸',
-  market: '◆',
-  emergency: '✱',
-  government: '▣',
-  transport: '◉',
-  lodging: '⌂',
-  landmark: '★',
-  shelter: '⛑',
+  health: '🏥',
+  education: '🏫',
+  religion: '🛕',
+  market: '🛒',
+  shop: '🏪',
+  emergency: '🚓',
+  government: '🏛️',
+  transport: '🚉',
+  lodging: '🏨',
+  landmark: '🌳',
+  shelter: '⛺',
+  finance: '🏦',
+  fuel: '⛽',
+  community: '🏘️',
 };
 
-const KIND_ICON: Record<string, string> = { mosque: '☪', church: '✝', shrine: '⛩' };
+/** finer icons for some kinds within a category */
+export const KIND_ICON: Record<string, string> = {
+  mosque: '🕌',
+  church: '⛪',
+  shrine: '🏮',
+  clinic: '🩺',
+  pharmacy: '💊',
+  dentist: '🦷',
+  university: '🎓',
+  faculty: '🎓',
+  kindergarten: '🧸',
+  fire_station: '🚒',
+  bus_station: '🚌',
+  airport: '✈️',
+  mall: '🛍️',
+  market: '🧺',
+  post_office: '📮',
+  museum: '🏺',
+  viewpoint: '🔭',
+  stadium: '🏟️',
+};
 
 interface Candidate {
   obj: CSS2DObject;
@@ -85,7 +110,7 @@ export class Labels {
     for (const f of city.meta.inflows) {
       const el = document.createElement('div');
       el.className = 'inflow-label';
-      el.innerHTML = `<span class="inflow-arrow" aria-hidden="true">⬆</span><span><b></b><small></small></span>`;
+      el.innerHTML = `<span class="inflow-arrow" aria-hidden="true">🌊</span><span><b></b><small></small></span>`;
       (el.querySelector('b') as HTMLElement).textContent = `น้ำไหลเข้า: ${f.name}`;
       const io = this.add(el, f.x, f.y, 40, [0.5, 1]);
       this.priority.set(io, 95);
@@ -169,7 +194,7 @@ export class Labels {
       const d = depths[i] ?? 0;
       const level = d >= 1 ? 'critical' : d >= 0.5 ? 'serious' : d >= 0.1 ? 'warning' : 'good';
       if (l.el.dataset.level !== level) l.el.dataset.level = level;
-      const txt = d >= 0.1 ? `${d.toFixed(1)} ม.` : '';
+      const txt = d >= 0.1 ? `${d.toFixed(1)} ม. ${bodyLevel(d).emoji}` : '';
       if (l.depthEl.textContent !== txt) l.depthEl.textContent = txt;
     });
   }
@@ -179,7 +204,8 @@ export class Labels {
     if (!e) return;
     const level = depth >= 1 ? 'critical' : depth >= 0.5 ? 'serious' : depth >= 0.1 ? 'warning' : 'good';
     e.root.dataset.level = level;
-    e.depth.textContent = depth >= 0.05 ? `น้ำ ${depth.toFixed(2)} ม.` : maxDepth >= 0.1 ? `แห้ง (สูงสุด ${maxDepth.toFixed(1)} ม.)` : 'แห้ง';
+    const body = bodyLevel(depth);
+    e.depth.textContent = depth >= 0.05 ? `น้ำ ${depth.toFixed(2)} ม. · ถึง${body.text} ${body.emoji}` : maxDepth >= 0.1 ? `แห้งแล้ว (เคยสูง ${maxDepth.toFixed(1)} ม.)` : 'แห้ง ✅';
   }
 
   setInflow(id: string, m3s: number) {

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { DEPTH_RAMP } from '../engine/glsl';
 import { useApp } from '../store';
-import { LEVEL_COLOR, LEVEL_TEXT, num, thaiShort } from './format';
+import { LEVEL_INK, LEVEL_TEXT, num, thaiShort } from './format';
 import { StatusIcon } from './StatsPanel';
 import { IconCloud, IconTrash } from './icons';
 
@@ -20,13 +20,13 @@ export function RunsPanel() {
       {!runs.length && <div className="rounded-xl border border-dashed border-line p-4 text-center text-[12px] text-ink-3">ยังไม่มีผลการรัน — กด ▶ เพื่อเริ่ม</div>}
       <ul className="flex flex-col gap-1.5">
         {runs.map((r) => (
-          <li key={r.id} className="rounded-xl border border-line bg-white/[0.03] p-2.5">
+          <li key={r.id} className="rounded-xl border border-line bg-card p-2.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="truncate text-[12.5px] font-medium">{r.scenario_name}</div>
                 <div className="text-[11px] text-ink-3">
                   {thaiShort(new Date(r.started_at))} · จำลอง {num(r.sim_hours, 1)} ชม. ·{' '}
-                  <span className={r.status === 'completed' ? 'text-good' : r.status === 'running' ? 'text-warning' : 'text-ink-2'}>
+                  <span className={r.status === 'completed' ? 'text-good-ink' : r.status === 'running' ? 'text-warning-ink' : 'text-ink-2'}>
                     {r.status === 'completed' ? 'ครบ' : r.status === 'running' ? 'กำลังรัน' : 'หยุดกลางทาง'}
                   </span>
                 </div>
@@ -71,14 +71,14 @@ export function LivePanel() {
   return (
     <div className="flex flex-col gap-2.5">
       <p className="text-[11.5px] leading-snug text-ink-2">สถานการณ์น้ำล่าสุดจากสถานีโทรมาตรกรมชลประทาน (ThaiWater / สสน.) อัปเดตทุก 5 นาที</p>
-      {err && <div className="rounded-lg bg-critical/15 px-2 py-1.5 text-[12px] text-[#ffc9c9]">ดึงข้อมูลไม่สำเร็จ: {err}</div>}
+      {err && <div className="rounded-lg bg-critical/15 px-2 py-1.5 text-[12px] text-critical-ink">ดึงข้อมูลไม่สำเร็จ: {err}</div>}
       {!live && !err && <div className="animate-pulse text-[12px] text-ink-3">กำลังโหลด…</div>}
       {live?.gauges.map((g) => {
         const def = city?.meta.gauges.find((x) => x.code === g.code);
         const bank = def?.critical ?? g.minBank ?? null;
         const pct = g.levelMsl !== null && bank ? Math.min(1, Math.max(0, g.levelMsl / bank)) : 0;
         return (
-          <div key={g.code} className="rounded-xl border border-line bg-white/[0.03] p-2.5">
+          <div key={g.code} className="rounded-xl border border-line bg-card p-2.5">
             <div className="flex items-baseline justify-between gap-2">
               <div className="truncate text-[12.5px] font-medium">
                 {g.code} {g.name}
@@ -93,7 +93,7 @@ export function LivePanel() {
             </div>
             {bank && (
               <div className="mt-1.5">
-                <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200/80">
                   <div className="h-full rounded-full bg-accent" style={{ width: `${pct * 100}%` }} />
                 </div>
                 <div className="mt-0.5 text-[10.5px] text-ink-3">ระดับวิกฤต/ตลิ่ง {num(bank, 2)} ม.รทก.</div>
@@ -103,7 +103,7 @@ export function LivePanel() {
         );
       })}
       {live && live.rain24h.length > 0 && (
-        <div className="rounded-xl border border-line bg-white/[0.03] p-2.5">
+        <div className="rounded-xl border border-line bg-card p-2.5">
           <div className="mb-1 text-[12px] font-medium">ฝนสะสม 24 ชม. รอบหาดใหญ่</div>
           <ul className="flex flex-col gap-0.5 text-[12px]">
             {live.rain24h.map((r) => (
@@ -157,7 +157,7 @@ function FloodStatusLegend() {
       <div className="mb-1 text-[11.5px] font-medium">หลังคาอาคารที่ถูกน้ำท่วม</div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
         {rows.map((r) => (
-          <span key={r.level} className="inline-flex items-center gap-1.5 whitespace-nowrap" style={{ color: LEVEL_COLOR[r.level] }}>
+          <span key={r.level} className="inline-flex items-center gap-1.5 whitespace-nowrap" style={{ color: LEVEL_INK[r.level] }}>
             <StatusIcon level={r.level} />
             <span className="text-ink">
               {LEVEL_TEXT[r.level]} <span className="text-ink-3">{r.text}</span>
@@ -172,7 +172,7 @@ function FloodStatusLegend() {
 export function Toast() {
   const toast = useApp((s) => s.toast);
   if (!toast) return null;
-  const tone = toast.kind === 'error' ? 'border-critical/50 text-[#ffd0d0]' : toast.kind === 'ok' ? 'border-good/50' : 'border-accent/50';
+  const tone = toast.kind === 'error' ? 'border-critical/50 text-critical-ink' : toast.kind === 'ok' ? 'border-good/50' : 'border-accent/50';
   return (
     <div role="status" className={`glass pointer-events-auto max-w-[420px] rounded-xl border px-3 py-2 text-[12.5px] ${tone}`}>
       {toast.text}

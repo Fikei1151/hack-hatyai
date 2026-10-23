@@ -1,0 +1,6 @@
+# Cache rules for Cloudflare Pages / Workers static assets and Netlify (copied to dist/ by the build).
+# Hashed build files never change; the city data is big, so let browsers keep it for a day.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/city/*
+  Cache-Control: public, max-age=86400

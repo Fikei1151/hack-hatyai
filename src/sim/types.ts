@@ -66,6 +66,12 @@ export interface Scenario {
     initial_lake_m?: number;
     /** id of the observed event this scenario replays (enables the X.44 comparison chart) */
     event_id?: string;
+    /** built-in scenarios: version of their source data; a stale stored copy is refreshed */
+    preset_version?: string;
+    /** set when the scenario came from the rain lab (what-if rain experiment) */
+    rain_lab?: { intensity: number; hours: number; pattern: string; river: string; drainsBlocked: boolean };
+    /** set when the scenario came from the ensemble forecast */
+    forecast?: { day?: string; variant: 'mean' | 'p90'; fetchedAt: string };
   };
   phases: Phase[];
 }

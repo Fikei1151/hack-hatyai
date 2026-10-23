@@ -88,7 +88,7 @@ export function ScenarioPanel() {
           </button>
         </div>
         {histOpen && (
-          <div className="flex flex-col gap-2 rounded-xl border border-line bg-white/[0.03] p-2.5">
+          <div className="flex flex-col gap-2 rounded-xl border border-line bg-card p-2.5">
             <div className="text-[11.5px] leading-snug text-ink-2">
               ดึงฝนรายชั่วโมง (ERA5 ปรับเทียบสถานีสนามบินหาดใหญ่) และน้ำท่าจริงจากสถานี X.90 + X.174 ของกรมชลประทานผ่าน ThaiWater
             </div>
@@ -110,7 +110,7 @@ export function ScenarioPanel() {
         {busy && <div className="animate-pulse text-[12px] text-ink-2">{busy}</div>}
       </section>
 
-      <section className="flex flex-col gap-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
+      <section className="flex flex-col gap-2 rounded-xl border border-line bg-card p-2.5">
         <input className="field text-[14px] font-semibold" value={scenario.name} onChange={(e) => a.patchScenario({ name: e.target.value })} aria-label="ชื่อสถานการณ์" />
         {scenario.description && <p className="max-h-24 overflow-auto text-[11.5px] leading-snug text-ink-2 scroll-thin">{scenario.description}</p>}
         <div className="grid grid-cols-2 gap-2 text-[12px]">
@@ -161,7 +161,7 @@ export function ScenarioPanel() {
               <button
                 type="button"
                 onClick={() => a.selectPhase(selected === i ? null : i)}
-                className={`flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors ${selected === i ? 'border-accent/60 bg-accent/10' : 'border-transparent hover:bg-white/5'}`}
+                className={`flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors ${selected === i ? 'border-accent/60 bg-accent/10' : 'border-transparent hover:bg-hover'}`}
                 aria-expanded={selected === i}
               >
                 <span className="h-7 w-1.5 flex-none rounded-full" style={{ background: p.color }} />
@@ -205,7 +205,7 @@ function PhaseEditor({ index, phase }: { index: number; phase: Phase }) {
   };
 
   return (
-    <div className="mt-1 mb-2 flex flex-col gap-2.5 rounded-xl border border-line bg-white/[0.03] p-2.5 text-[12px]">
+    <div className="mt-1 mb-2 flex flex-col gap-2.5 rounded-xl border border-line bg-card p-2.5 text-[12px]">
       <div className="flex gap-2">
         <input className="field flex-1" value={phase.name} onChange={(e) => up({ name: e.target.value })} aria-label="ชื่อเฟส" />
         <input type="color" className="h-[31px] w-9 flex-none cursor-pointer rounded-md border border-line bg-transparent" value={phase.color} onChange={(e) => up({ color: e.target.value })} aria-label="สีเฟส" />
@@ -268,7 +268,7 @@ function PhaseEditor({ index, phase }: { index: number; phase: Phase }) {
       <div className="flex flex-col gap-1.5">
         <div className="text-[11.5px] text-ink-2">เหตุการณ์พิเศษในเฟสนี้</div>
         {phase.events.map((ev, k) => (
-          <div key={k} className="flex items-center gap-1.5 rounded-lg bg-white/[0.04] px-2 py-1">
+          <div key={k} className="flex items-center gap-1.5 rounded-lg bg-card px-2 py-1">
             <span className="min-w-0 flex-1 truncate">
               {ev.label ?? ev.type} · ชม.ที่ {num(ev.at_hours, 1)}–{num(ev.at_hours + ev.duration_hours, 1)} ·{' '}
               {ev.type === 'surge' ? `${num(ev.magnitude)} ม³/วิ` : ev.type === 'drain_block' ? `ลดลง ${num(ev.magnitude * 100)}%` : `+${num(ev.magnitude, 2)} ม.`}
@@ -301,7 +301,7 @@ function PhaseEditor({ index, phase }: { index: number; phase: Phase }) {
         <button type="button" className="btn px-2" onClick={() => a.duplicatePhase(index)}>
           <IconCopy /> ทำซ้ำ
         </button>
-        <button type="button" className="btn ml-auto px-2 text-[#ffb4a8]" disabled={n <= 1} onClick={() => a.removePhase(index)}>
+        <button type="button" className="btn ml-auto px-2 text-critical-ink" disabled={n <= 1} onClick={() => a.removePhase(index)}>
           <IconTrash /> ลบ
         </button>
       </div>

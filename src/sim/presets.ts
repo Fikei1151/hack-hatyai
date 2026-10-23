@@ -3,6 +3,9 @@ import { makePhase } from './scenario';
 import type { Scenario } from './types';
 
 /** Synthetic design scenarios. Observed-event replays are built from events.json (see realdata.ts). */
+/** bump when the built-in synthetic scenarios change, so stored copies are refreshed */
+const PRESETS_VERSION = '2026-10-20';
+
 export function syntheticPresets(banks: BankPoint[]): Scenario[] {
   // breach on the Ban Hat Yai Nai (left/west) bank near gauge X.44, where RID reports first overtopping
   const breach = banks
@@ -17,7 +20,7 @@ export function syntheticPresets(banks: BankPoint[]): Scenario[] {
       source: 'preset',
       seed: 11,
       start_time: '2026-11-12T14:00:00+07:00',
-      settings: { initial_inflow_m3s: 45, initial_lake_m: 0.8 },
+      settings: { preset_version: PRESETS_VERSION, initial_inflow_m3s: 45, initial_lake_m: 0.8 },
       phases: [
         makePhase({ name: 'เมฆฝนก่อตัว', duration_hours: 1, rain_mm_hr: 12, rain_pattern: 'storm_cells', storm_cells: 3, rain_variability: 0.6, wind_speed_kmh: 12, upstream_inflow_m3s: 50, lake_level_m: 0.8 }),
         makePhase({ name: 'พายุฝนกระหน่ำ', duration_hours: 2, rain_mm_hr: 85, rain_pattern: 'storm_cells', storm_cells: 4, rain_variability: 0.7, wind_speed_kmh: 8, upstream_inflow_m3s: 90, lake_level_m: 0.8, color: '#db2777' }),
@@ -33,7 +36,7 @@ export function syntheticPresets(banks: BankPoint[]): Scenario[] {
       source: 'preset',
       seed: 23,
       start_time: '2026-11-20T06:00:00+07:00',
-      settings: { initial_inflow_m3s: 60, initial_lake_m: 0.85 },
+      settings: { preset_version: PRESETS_VERSION, initial_inflow_m3s: 60, initial_lake_m: 0.85 },
       phases: [
         makePhase({ name: 'ฝนเริ่มตก', duration_hours: 12, rain_mm_hr: 5, rain_pattern: 'uniform', upstream_inflow_m3s: 180, lake_level_m: 0.85 }),
         makePhase({ name: 'ฝนหนักต่อเนื่อง', duration_hours: 18, rain_mm_hr: 16, rain_pattern: 'orographic', rain_variability: 0.4, upstream_inflow_m3s: 650, lake_level_m: 0.95 }),
@@ -51,7 +54,7 @@ export function syntheticPresets(banks: BankPoint[]): Scenario[] {
       source: 'preset',
       seed: 31,
       start_time: '2026-11-24T00:00:00+07:00',
-      settings: { initial_inflow_m3s: 300, initial_lake_m: 1.0 },
+      settings: { preset_version: PRESETS_VERSION, initial_inflow_m3s: 300, initial_lake_m: 1.0 },
       phases: [
         makePhase({ name: 'ฝนหนัก', duration_hours: 8, rain_mm_hr: 20, rain_pattern: 'storm_cells', storm_cells: 6, upstream_inflow_m3s: 1100, lake_level_m: 1.05 }),
         makePhase({

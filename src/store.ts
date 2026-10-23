@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { CityData, Place, PlaceCategory } from './engine/cityData';
-import type { Engine, Layers, PlaceImpact } from './engine/Engine';
+import type { DaySummary, Engine, Layers, PlaceImpact } from './engine/Engine';
+import { dayScenario, fetchOutlook, outlookScenario, type Outlook } from './sim/forecast';
+import { rainLabScenario, type RainLabOptions } from './sim/rainlab';
 import * as repo from './lib/repository';
 import { syntheticPresets } from './sim/presets';
 import { bankPoints, randomScenario } from './sim/random';
@@ -10,6 +12,8 @@ import { cloneScenario, makePhase, totalHours } from './sim/scenario';
 import type { LiveStats, Phase, Scenario, SeriesPoint } from './sim/types';
 
 let engine: Engine | null = null;
+/** history row of the rain-lab run that just finished, still taking its final readback */
+let openLabResult: string | null = null;
 export const setEngine = (e: Engine | null) => (engine = e);
 export const getEngine = () => engine;
 
@@ -21,7 +25,9 @@ export const SPEEDS = [
   { value: 18000, label: '10x', hint: '5 ชั่วโมงต่อวินาที (เร็วสุดเท่าที่ GPU ทำได้)' },
 ];
 
-export const ALL_CATEGORIES: PlaceCategory[] = ['health', 'emergency', 'shelter', 'education', 'religion', 'market', 'government', 'transport', 'landmark', 'lodging'];
+export const ALL_CATEGORIES: PlaceCategory[] = ['health', 'emergency', 'shelter', 'community', 'education', 'religion', 'market', 'government', 'transport', 'landmark', 'lodging', 'shop', 'fuel', 'finance'];
+/** shown on the map by default; the busier everyday categories are one click away */
+export const DEFAULT_CATEGORIES: PlaceCategory[] = ['health', 'emergency', 'shelter', 'community', 'education', 'religion', 'market', 'government', 'transport', 'landmark'];
 
 export interface ImpactSnapshot {
   depth: Float32Array;
@@ -37,6 +43,27 @@ interface Peaks {
   volume: number;
   buildings: number;
   pois: Record<string, number>;
+}
+
+export interface LabResult {
+  id: string;
+  intensity: number;
+  hours: number;
+  pattern: string;
+  river: string;
+  drainsBlocked: boolean;
+  areaKm2: number;
+  buildings: number;
+  maxDepth: number;
+}
+
+const WELCOME_KEY = 'hatyai.welcome.v1';
+function welcomeSeen() {
+  try {
+    return localStorage.getItem(WELCOME_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 interface AppState {
@@ -61,7 +88,27 @@ interface AppState {
   liveError: string | null;
   busy: string | null;
   toast: Toast;
-  panel: 'scenario' | 'places' | 'runs' | 'live';
+  /** 'game' = the rescue board game owns the screen */
+  mode: 'sim' | 'game';
+  setMode: (m: 'sim' | 'game') => void;
+  panel: 'rainlab' | 'forecast' | 'scenario' | 'places' | 'runs' | 'live';
+  days: DaySummary[];
+  viewingDay: string | null;
+  ffActive: boolean;
+  outlook: Outlook | null;
+  outlookError: string | null;
+  outlookLoading: boolean;
+  labHistory: LabResult[];
+  showWelcome: boolean;
+  onDaySnapshot: (d: DaySummary) => void;
+  onFastForwardDone: () => void;
+  viewDay: (key: string | null) => void;
+  nextDay: () => void;
+  loadOutlook: (force?: boolean) => Promise<void>;
+  simulateDay: (dayIndex: number, variant: 'mean' | 'p90') => void;
+  simulateOutlook: () => void;
+  runRainLab: (o: RainLabOptions) => void;
+  dismissWelcome: () => void;
   places: Place[];
   placesSource: 'city' | 'supabase';
   impact: ImpactSnapshot | null;
@@ -94,7 +141,7 @@ interface AppState {
   randomize: (seed?: number) => void;
   loadForecast: () => Promise<void>;
   loadHistorical: (date: string, days: number) => Promise<void>;
-  loadEvent: (id: string) => void;
+  loadEvent: (id: string) => Promise<void>;
   refreshLists: () => Promise<void>;
   deleteRun: (id: string) => Promise<void>;
   refreshLive: () => Promise<void>;
@@ -143,7 +190,7 @@ export const useApp = create<AppState>((set, get) => ({
     canalNames: true,
     roadNames: true,
     keyPlaces: true,
-    placeCategories: ALL_CATEGORIES.filter((c) => c !== 'lodging'),
+    placeCategories: DEFAULT_CATEGORIES,
     highlight: true,
     waterMode: 'realistic',
     impact: 'off',
@@ -157,7 +204,17 @@ export const useApp = create<AppState>((set, get) => ({
   liveError: null,
   busy: null,
   toast: null,
-  panel: 'scenario',
+  mode: 'sim',
+  setMode: (m) => set({ mode: m }),
+  panel: 'rainlab',
+  days: [],
+  viewingDay: null,
+  ffActive: false,
+  outlook: null,
+  outlookError: null,
+  outlookLoading: false,
+  labHistory: [],
+  showWelcome: !welcomeSeen(),
   places: [],
   placesSource: 'city',
   impact: null,
@@ -243,6 +300,10 @@ export const useApp = create<AppState>((set, get) => ({
     if (st.finished || engine.isFinished) {
       st.resetSim();
     }
+    if (get().viewingDay) {
+      engine.viewDay(null);
+      set({ viewingDay: null });
+    }
     set({ playing: true });
     if (!get().runId) {
       const snapshot = cloneScenario(get().scenario);
@@ -257,10 +318,11 @@ export const useApp = create<AppState>((set, get) => ({
     syncRun(get, false);
   },
   resetSim: () => {
+    openLabResult = null;
     const prev = get().runId;
     if (prev && engine && engine.simTime > 0 && !get().finished) syncRun(get, true, 'stopped');
     engine?.reset();
-    set({ playing: false, finished: false, stats: null, series: [], peaks: emptyPeaks(), runId: null });
+    set({ playing: false, finished: false, stats: null, series: [], peaks: emptyPeaks(), runId: null, days: [], viewingDay: null, ffActive: false });
   },
   setSpeed: (v) => set({ speed: v }),
   setLayer: (k, v) => set((st) => ({ layers: { ...st.layers, [k]: v } })),
@@ -277,11 +339,26 @@ export const useApp = create<AppState>((set, get) => ({
         pois,
       };
       if (st.playing && performance.now() - lastRunSync > 8000) queueMicrotask(() => syncRun(get, false));
-      return { stats: s, peaks };
+      // the last readback of a finished rain-lab run lands after onFinished: keep its history row current
+      let labHistory = st.labHistory;
+      if (st.finished && openLabResult && labHistory[0]?.id === openLabResult)
+        labHistory = [{ ...labHistory[0], areaKm2: peaks.area, buildings: peaks.buildings, maxDepth: peaks.depth }, ...labHistory.slice(1)];
+      return { stats: s, peaks, labHistory };
     }),
   onSeriesPoint: (p) => set((st) => ({ series: [...st.series, p] })),
   onFinished: () => {
-    set({ playing: false, finished: true });
+    set({ playing: false, finished: true, ffActive: false });
+    const lab = get().scenario.settings.rain_lab;
+    if (lab) {
+      const pk = get().peaks;
+      openLabResult = crypto.randomUUID();
+      set((st) => ({
+        labHistory: [
+          { id: openLabResult as string, intensity: lab.intensity, hours: lab.hours, pattern: lab.pattern, river: lab.river, drainsBlocked: lab.drainsBlocked, areaKm2: pk.area, buildings: pk.buildings, maxDepth: pk.depth },
+          ...st.labHistory,
+        ].slice(0, 8),
+      }));
+    }
     setTimeout(() => {
       syncRun(get, true, 'completed');
       const { runId, impact, places } = get();
@@ -296,7 +373,11 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   saveCurrent: async () => {
-    const s = get().scenario;
+    let s = get().scenario;
+    // built-in scenarios stay pristine (they are refreshed when their data changes): save edits as a copy
+    if (s.slug && (s.source === 'preset' || s.source === 'historical')) {
+      s = { ...s, id: undefined, slug: undefined, source: 'custom', name: `${s.name} (ฉบับแก้ไข)`, settings: { ...s.settings, preset_version: undefined } };
+    }
     set({ busy: 'กำลังบันทึก…' });
     try {
       const id = await repo.saveScenario(s);
@@ -382,11 +463,11 @@ export const useApp = create<AppState>((set, get) => ({
       set({ busy: null });
     }
   },
-  loadEvent: (id) => {
+  loadEvent: async (id) => {
     const e = get().events.find((x) => x.id === id);
     if (!e) return;
     const stored = get().saved.find((s) => s.slug === `event-${id}`);
-    if (stored) void get().loadSaved(stored.id);
+    if (stored) await get().loadSaved(stored.id);
     else get().setScenario(scenarioFromEvent(e));
   },
   refreshLists: async () => {
@@ -410,6 +491,64 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
   setPanel: (p) => set({ panel: p }),
+  onDaySnapshot: (d) => set((st) => ({ days: [...st.days.filter((x) => x.key !== d.key), d].sort((a, b) => a.key.localeCompare(b.key)) })),
+  onFastForwardDone: () => set({ ffActive: false }),
+  viewDay: (key) => {
+    engine?.viewDay(key);
+    set({ viewingDay: key, playing: key ? false : get().playing });
+  },
+  nextDay: () => {
+    if (!engine) return;
+    if (get().viewingDay) set({ viewingDay: null });
+    if (engine.fastForwardToNextDay()) {
+      set({ ffActive: true, playing: false });
+      if (!get().runId) {
+        repo
+          .createRun(cloneScenario(get().scenario), get().city?.meta.cell ?? 20)
+          .then((id) => set({ runId: id }))
+          .catch(() => undefined);
+      }
+    }
+  },
+  loadOutlook: async (force) => {
+    set({ outlookLoading: true, outlookError: null });
+    try {
+      const key = `outlook:${new Date().toISOString().slice(0, 13)}${force ? `:${Date.now()}` : ''}`;
+      const o = await repo.cached(key, 3, fetchOutlook);
+      set({ outlook: o });
+    } catch (e) {
+      set({ outlookError: (e as Error).message });
+    } finally {
+      set({ outlookLoading: false });
+    }
+  },
+  simulateDay: (dayIndex, variant) => {
+    const o = get().outlook;
+    if (!o) return;
+    get().setScenario(dayScenario(o, dayIndex, variant), { keepDirty: true });
+    set({ speed: 1800 });
+    get().play();
+  },
+  simulateOutlook: () => {
+    const o = get().outlook;
+    if (!o) return;
+    get().setScenario(outlookScenario(o), { keepDirty: true });
+    set({ speed: 5400 });
+    get().play();
+  },
+  runRainLab: (o) => {
+    get().setScenario(rainLabScenario(o), { keepDirty: true });
+    set({ speed: 5400 });
+    get().play();
+  },
+  dismissWelcome: () => {
+    set({ showWelcome: false });
+    try {
+      localStorage.setItem(WELCOME_KEY, '1');
+    } catch {
+      /* private mode: it will just show again next time */
+    }
+  },
   onPlaceImpact: (im) => set({ impact: { depth: Float32Array.from(im.depth), maxDepth: Float32Array.from(im.maxDepth), firstWet: Float32Array.from(im.firstWet) } }),
   toggleCategory: (c) =>
     set((st) => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Engine } from '../engine/Engine';
+import { useGame } from '../game/store';
 import { setEngine, useApp } from '../store';
 
 /** Hosts the WebGL canvas and owns the Engine's lifetime. */
@@ -24,6 +25,11 @@ export function Viewport() {
           useApp.getState().setPanel('places');
         },
         onPlaceImpact: (im) => useApp.getState().onPlaceImpact(im),
+        onDaySnapshot: (d) => useApp.getState().onDaySnapshot(d),
+        onFastForwardDone: () => {
+          useApp.getState().onFastForwardDone();
+          void useGame.getState().onFloodDone();
+        },
       });
       const loaded = useApp.getState();
       if (loaded.placesSource === 'supabase') engine.setPlaces(loaded.places);
@@ -38,6 +44,7 @@ export function Viewport() {
       if (e.code !== 'Space' || (e.target as HTMLElement).closest('input, select, textarea, button')) return;
       e.preventDefault();
       const st = useApp.getState();
+      if (st.mode === 'game') return;
       if (st.playing) st.pause();
       else st.play();
     };
